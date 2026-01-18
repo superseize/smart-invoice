@@ -1,0 +1,3 @@
+pay_id,inv_no,date,amount,method,customer,address,note
+1,113,17-01-26,4000.00,Cash,,,Manual adjustment via Payments Sheet
+2,118,18-01-26,4100.00,Cash,,,Manual adjustment via Payments Sheet

@@ -1,0 +1,15 @@
+key,value
+project_name,Smart Invoice
+company_name,COMPANY NAME
+tax_default,0
+date_format,dd-mm-yy
+invoice_start,100
+logo_path,
+logo_show,1
+auto_create_folders,1
+output_folder,
+developer_name,ISHTIAQ AHMAD MAGRAY
+developer_phone,+923495820495
+contact_msg,"For new software development, contact the developer above."
+growth_rate,10
+show_pending,0
