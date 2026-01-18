@@ -1,94 +1,137 @@
-# app.py — Smart Invoice (fixed, merged, draft-save and Google login)
+# app.py — Smart Invoice (stable header)
+
+# ===================== IMPORTS =====================
 from pathlib import Path
 import sys
+import os
+import csv, datetime, json, io
+from typing import Optional
+import sqlite3
 
-# EXE کے لیے صحیح path سیٹ کریں
-if getattr(sys, 'frozen', False):  # PyInstaller EXE چل رہی ہو تو
+from flask import (
+    Flask, request, redirect, url_for,
+    send_from_directory, render_template_string,
+    flash, jsonify, session, Response,
+    send_file, get_flashed_messages, render_template
+)
+from werkzeug.utils import secure_filename
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
+
+
+# ===================== EXE / ROOT =====================
+if getattr(sys, 'frozen', False):  # PyInstaller EXE
     ROOT = Path(sys.executable).parent
 else:
     ROOT = Path.cwd()
-SALES_CSV = Path("data/sales_log.csv")
 
+
+# ===================== PERSISTENT DATA PATH =====================
+# Local: ./data
+# Render: /var/data (ENV: DATA_PATH)
+
+BASE_DATA = Path(os.environ.get("DATA_PATH", "data"))
+
+DATA_DIR = BASE_DATA / "data"
+UPLOADS_DIR = BASE_DATA / "uploads"
+RECORDS_DIR = BASE_DATA / "BusinessRecords"
+DB_DIR = BASE_DATA / "db"
+
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+RECORDS_DIR.mkdir(parents=True, exist_ok=True)
+DB_DIR.mkdir(parents=True, exist_ok=True)
+
+DB_FILE = DB_DIR / "smart_invoice.db"
+SALES_CSV = DATA_DIR / "sales_log.csv"
+
+
+# ===================== SALES CSV HELPERS =====================
 def read_sales_csv():
     if not SALES_CSV.exists():
         return []
     with open(SALES_CSV, "r", encoding="utf-8") as f:
         return list(csv.DictReader(f))
 
+
 def write_sales_csv(rows):
     with open(SALES_CSV, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=["date","inv_no","product","qty","sell_price"]
+            fieldnames=["date", "inv_no", "product", "qty", "sell_price"]
         )
         writer.writeheader()
         writer.writerows(rows)
 
-import csv, datetime, json, os, io
-from typing import Optional
 
-
-# =====================================================================
-import sqlite3                     # <--- یہ نئی لائن سب سے اوپر ڈالیں
-# ============== SQLite Database Setup (ایک دفعہ چلے تو سارے ٹیبلز خود بن جائیں گے) ==============
+# ===================== SQLITE INIT =====================
 def init_db():
     try:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
-        
-        # Products table (stock + purchase price + selling price)
-        c.execute('''CREATE TABLE IF NOT EXISTS products (
-                     name TEXT PRIMARY KEY,
-                     stock REAL DEFAULT 0,
-                     unit_price REAL DEFAULT 0,
-                     purchase_price REAL DEFAULT 0)''')
-       
-        
-        # Purchases log (جب آپ Stock Entry کرو گے)
-        c.execute('''CREATE TABLE IF NOT EXISTS purchases (
-                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                     date TEXT DEFAULT (date('now')),
-                     product TEXT,
-                     qty REAL,
-                     price REAL)''')
-        
-        # Expenses table
-        c.execute('''CREATE TABLE IF NOT EXISTS expenses (
-                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                     date TEXT,
-                     amount REAL,
-                     description TEXT)''')
-        # Targets table - پراڈکٹ وائز ٹارگٹ (یہ لازمی درست ہو)
-        c.execute('''CREATE TABLE IF NOT EXISTS targets (
-                     month TEXT,
-                     product TEXT,
-                     qty REAL DEFAULT 0,
-                     PRIMARY KEY (month, product))''')                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
-        # Customer Pending Amount Table (نیا اضافہ)
-        c.execute('''CREATE TABLE IF NOT EXISTS customer_pending (
-                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                     customer_name TEXT,
-                     customer_address TEXT,
-                     pending_amount REAL DEFAULT 0,
-                     UNIQUE(customer_name, customer_address))''')
-        
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS products (
+                name TEXT PRIMARY KEY,
+                stock REAL DEFAULT 0,
+                unit_price REAL DEFAULT 0,
+                purchase_price REAL DEFAULT 0
+            )
+        """)
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS purchases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT DEFAULT (date('now')),
+                product TEXT,
+                qty REAL,
+                price REAL
+            )
+        """)
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS expenses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT,
+                amount REAL,
+                description TEXT
+            )
+        """)
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS targets (
+                month TEXT,
+                product TEXT,
+                qty REAL DEFAULT 0,
+                PRIMARY KEY (month, product)
+            )
+        """)
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS customer_pending (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                customer_name TEXT,
+                customer_address TEXT,
+                pending_amount REAL DEFAULT 0,
+                UNIQUE(customer_name, customer_address)
+            )
+        """)
+
         conn.commit()
         conn.close()
-        print("SQLite tables created successfully!")
-    except Exception as e:
-        print("DB Error:", e)
+        print("✅ SQLite tables ready")
 
-# یہ لائن لازمی ڈالو — ایپ کے شروع میں
+    except Exception as e:
+        print("❌ DB Error:", e)
+
+
+# ===================== INIT DB (ON START) =====================
 init_db()
-from pathlib import Path
-import csv, datetime, json, os, io
-from typing import Optional
-from flask import Flask, request, redirect, url_for, send_from_directory, render_template_string, flash, jsonify, session, Response, render_template
-from flask import Flask, request, redirect, url_for, send_from_directory, render_template_string, flash, jsonify, session, Response
-from werkzeug.utils import secure_filename
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import A4
-from flask import Flask, request, redirect, url_for, send_file, flash, get_flashed_messages, render_template
+
+
+# ===================== FLASK APP =====================
+app = Flask(__name__, static_folder="static")
+app.secret_key = os.getenv("APP_SECRET", "smart-invoice-change-this")
 
 
 # ==== لاغ ان لازمی کرنے کے لیے ====
@@ -159,7 +202,7 @@ def login():
     </div>
             </form>
             <div class="info">
-                <small>Default password: <strong>12345</strong></small>
+                <small> <strong> </strong></small>
             </div>
         </div>
     </body>
