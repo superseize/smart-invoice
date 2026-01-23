@@ -42,8 +42,7 @@ UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 RECORDS_DIR.mkdir(parents=True, exist_ok=True)
 DB_DIR.mkdir(parents=True, exist_ok=True)
 
-DB_FILE = DB_DIR / "smart_invoice.db"
-SALES_CSV = DATA_DIR / "sales_log.csv"
+DB_FILE = str(DB_DIR / "smart_invoice.db")
 
 
 # ===================== SALES CSV HELPERS =====================
@@ -70,6 +69,85 @@ def init_db():
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
 
+        # ========== INVOICES MASTER ==========
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS invoices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            inv_no TEXT UNIQUE,
+            date TEXT,
+            customer TEXT,
+            customer_address TEXT,
+            salesman TEXT,
+            total REAL DEFAULT 0,
+            paid REAL DEFAULT 0,
+            status TEXT
+        )
+        """)
+
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS salesmen (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE,
+           role TEXT DEFAULT 'salesman',
+           active INTEGER DEFAULT 1,
+           permissions TEXT DEFAULT '{}'
+        )
+        """)
+
+
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS sequences (
+            key TEXT PRIMARY KEY,
+            value INTEGER
+        )
+        """)
+
+        # ========== INVOICE ITEMS ==========
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS invoice_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            inv_no TEXT,
+            product TEXT,
+            qty REAL,
+            price REAL
+        )
+        """)
+        # payments
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            inv_no INTEGER,
+            amount REAL,
+            method TEXT,
+            date TEXT,
+            note TEXT
+        )
+        """)
+
+
+        # --- CUSTOMERS ---
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS customers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            address TEXT,
+            phone TEXT,
+            UNIQUE(name, address)
+        )
+        """)
+
+        # --- SALES LOG ---
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS sales_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT,
+            inv_no TEXT,
+            product TEXT,
+            qty REAL,
+            sell_price REAL
+        )
+        """)
+
         c.execute("""
             CREATE TABLE IF NOT EXISTS products (
                 name TEXT PRIMARY KEY,
@@ -77,6 +155,13 @@ def init_db():
                 unit_price REAL DEFAULT 0,
                 purchase_price REAL DEFAULT 0
             )
+        """)
+
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
         """)
 
         c.execute("""
@@ -124,27 +209,142 @@ def init_db():
     except Exception as e:
         print("❌ DB Error:", e)
 
+def migrate_salesmen_columns():
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    
+    # role کالم
+    try:
+        cur.execute("ALTER TABLE salesmen ADD COLUMN role TEXT DEFAULT 'salesman'")
+        conn.commit()
+        print("✅ Added 'role' column to salesmen table")
+    except sqlite3.OperationalError as e:
+        if "duplicate column name" in str(e):
+            print("ℹ️ 'role' column already exists")
+        else:
+            print("❌ Error adding role column:", e)
+    
+    # active کالم
+    try:
+        cur.execute("ALTER TABLE salesmen ADD COLUMN active INTEGER DEFAULT 1")
+        conn.commit()
+        print("✅ Added 'active' column to salesmen table")
+    except sqlite3.OperationalError as e:
+        if "duplicate column name" in str(e):
+            print("ℹ️ 'active' column already exists")
+        else:
+            print("❌ Error adding active column:", e)
+    
+    # permissions کالم (نیا اضافہ)
+    try:
+        cur.execute("ALTER TABLE salesmen ADD COLUMN permissions TEXT DEFAULT '{}'")
+        conn.commit()
+        print("✅ Added 'permissions' column to salesmen table")
+    except sqlite3.OperationalError as e:
+        if "duplicate column name" in str(e):
+            print("ℹ️ 'permissions' column already exists")
+        else:
+            print("❌ Error adding permissions column:", e)
+    
+    conn.close()
 
+# اب اسے پروگرام شروع ہوتے ہی چلائیں
+migrate_salesmen_columns()   # ← یہ لائن init_db() کے نیچے یا __main__ میں ڈالیں
 # ===================== INIT DB (ON START) =====================
 init_db()
+def db():
+    return sqlite3.connect(DB_FILE)
+# ---------- DB MIGRATION (SAFE) ----------
+def migrate_products_add_min_stock():
+    con = db()
+    cur = con.cursor()
+    try:
+        cur.execute(
+            "ALTER TABLE products ADD COLUMN min_stock REAL DEFAULT 0"
+        )
+        con.commit()
+        print("✅ min_stock column added")
+    except Exception as e:
+        print("ℹ️ min_stock already exists or skipped")
+    con.close()
 
+migrate_products_add_min_stock()
+# ---------- MIGRATION : ADD remarks TO invoices ----------
+def migrate_add_invoice_remarks():
+    con = sqlite3.connect(DB_FILE)
+    cur = con.cursor()
+    try:
+        cur.execute("ALTER TABLE invoices ADD COLUMN remarks TEXT")
+        con.commit()
+        print("✅ invoices.remarks column added")
+    except Exception:
+        print("ℹ️ invoices.remarks already exists")
+    con.close()
 
+migrate_add_invoice_remarks()
+def migrate_invoices_columns():
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+
+    # name
+    try:
+        cur.execute("ALTER TABLE invoices ADD COLUMN name TEXT")
+    except:
+        pass
+
+    # address
+    try:
+        cur.execute("ALTER TABLE invoices ADD COLUMN address TEXT")
+    except:
+        pass
+
+    # phone
+    try:
+        cur.execute("ALTER TABLE invoices ADD COLUMN phone TEXT")
+    except:
+        pass
+
+    # pending_added
+    try:
+        cur.execute("ALTER TABLE invoices ADD COLUMN pending_added REAL DEFAULT 0")
+    except:
+        pass
+
+    conn.commit()
+    conn.close()
+
+#______
+def migrate_invoices_columns():
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+
+    columns = [
+        ("name", "TEXT"),
+        ("address", "TEXT"),
+        ("phone", "TEXT"),
+        ("pending_added", "REAL DEFAULT 0")
+    ]
+
+    for col_name, col_type in columns:
+        try:
+            cur.execute(f"ALTER TABLE invoices ADD COLUMN {col_name} {col_type}")
+            conn.commit()
+            print(f"✅ '{col_name}' کالم invoices ٹیبل میں شامل ہو گیا")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" in str(e):
+                print(f"ℹ️ '{col_name}' کالم پہلے سے موجود ہے")
+            else:
+                print(f"❌ '{col_name}' شامل کرنے میں ایرر: {e}")
+
+    conn.commit()
+    conn.close()
+init_db()
+migrate_invoices_columns()   # ← یہ لائن ضرور ڈالیں
 # ===================== FLASK APP =====================
 app = Flask(__name__, static_folder="static")
 app.secret_key = os.getenv("APP_SECRET", "smart-invoice-change-this")
 
 
-# ==== لاغ ان لازمی کرنے کے لیے ====
-def login_required(f):
-    from functools import wraps
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if not google.authorized:
-            return redirect(url_for("google.login"))
-        return f(*args, **kwargs)
-    return decorated_function
-app = Flask(__name__, static_folder="static")
-app.secret_key = os.getenv("APP_SECRET", "smart-invoice-key-change-this")
 # ========== سادہ اور خوبصورت پاس ورڈ لاگ ان ==========
 def login_required(f):
     from functools import wraps
@@ -256,43 +456,7 @@ def reset_password():
     </body>
     </html>
     """, question=question)
-# ---------- Paths ----------
-#ROOT = Path.cwd()
-DATA = ROOT / "data"
-UPLOADS = ROOT / "uploads"
 
-# <--- یہ تین نئی لائنز یہاں ڈالیں --->
-DB_FILE = DATA / "smart_invoice_system.db"        # SQLite ڈیٹا بیس فائل
-DATA.mkdir(parents=True, exist_ok=True)    # data فولڈر بن جائے گا
-UPLOADS.mkdir(parents=True, exist_ok=True) # uploads بھی
-
-for p in (DATA, UPLOADS):
-    p.mkdir(parents=True, exist_ok=True)
-
-PRODUCTS  = DATA / "products.csv"
-CUSTOMERS = DATA / "customers.csv"
-INVOICES  = DATA / "invoices.csv"
-LINES     = DATA / "invoice_lines.csv"
-PAYMENTS  = DATA / "payments.csv"
-SETTINGS  = DATA / "settings.csv"
-SEQ       = DATA / "sequence.csv"
-EXPENSES_CSV = DATA / "expenses.csv"
-# موجودہ paths کے ساتھ یہ لائن شامل کریں
-TARGETS_CSV = DATA / "targets.csv"
-def _ensure(path: Path, head):
-    if not path.exists():
-        with path.open("w", newline="", encoding="utf-8") as f:
-            csv.writer(f).writerow(head)
-
-_ensure(PRODUCTS,  ["name","unit_price","purchase_price","stock","min_stock"])
-_ensure(CUSTOMERS, ["name","address","phone"])
-_ensure(INVOICES, ["inv_no","date","name","address","phone","tax","total","logo_path","pending_added","remarks"])
-_ensure(LINES,     ["inv_no","product","qty","unit_price"])
-_ensure(EXPENSES_CSV, ["id", "date", "amount", "description"])
-_ensure(TARGETS_CSV, ["month", "product", "qty"])
-_ensure(PAYMENTS,  ["pay_id","inv_no","date","amount","method","customer","address","note"])
-_ensure(SETTINGS,  ["key","value"])
-_ensure(SEQ,       ["key","value"])
 
 # ---------- CSV helpers ----------
 def read_csv(p: Path):
@@ -319,70 +483,87 @@ def append_csv(p: Path, row, head):
     with p.open("a", newline="", encoding="utf-8") as f:
         csv.DictWriter(f, fieldnames=head).writerow(row)
 
+# ---------- SQLITE SEQUENCE ----------
 def get_seq(key, start=1):
-    rows = read_csv(SEQ)
-    for r in rows:
-        if r["key"] == key:
-            try:
-                return int(r["value"])
-            except:
-                return start
-    rows.append({"key": key, "value": str(start)})
-    write_csv(SEQ, rows, ["key","value"])
-    return start
+    con = db()
+    cur = con.cursor()
 
-def set_seq(key, val):
-    rows = read_csv(SEQ)
-    found = False
-    for r in rows:
-        if r["key"] == key:
-            r["value"] = str(val)
-            found = True
-    if not found:
-        rows.append({"key": key, "value": str(val)})
-    write_csv(SEQ, rows, ["key","value"])
+    cur.execute(
+        "SELECT value FROM sequences WHERE key=?",
+        (key,)
+    )
+    row = cur.fetchone()
+
+    if row:
+        val = row[0] + 1
+        cur.execute(
+            "UPDATE sequences SET value=? WHERE key=?",
+            (val, key)
+        )
+    else:
+        val = start
+        cur.execute(
+            "INSERT INTO sequences (key, value) VALUES (?,?)",
+            (key, val)
+        )
+
+    con.commit()
+    con.close()
+    return val
 
 # ---------- Settings ----------
-def get_setting(k, default=""):
-    for r in read_csv(SETTINGS):
-        if r["key"] == k:
-            return r["value"]
-    return default
+def get_setting(key, default=""):
+    con = db()
+    cur = con.cursor()
+    cur.execute("SELECT value FROM settings WHERE key = ?", (key,))
+    row = cur.fetchone()
+    con.close()
+    return row[0] if row else default
 
-def set_setting(k, v):
-    rows = read_csv(SETTINGS)
-    found = False
-    for r in rows:
-        if r["key"] == k:
-            r["value"] = str(v)
-            found = True
-    if not found:
-        rows.append({"key": k, "value": str(v)})
-    write_csv(SETTINGS, rows, ["key","value"])
+
+def set_setting(key, value):
+    con = db()
+    cur = con.cursor()
+    cur.execute("""
+        INSERT INTO settings (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    """, (key, str(value)))
+    con.commit()
+    con.close()
+
 
 def init_settings():
-    s = read_csv(SETTINGS)
-    keys = {r["key"] for r in s}
-    def put(k, v):
-        if k not in keys:
-            s.append({"key": k, "value": v})
-            keys.add(k)
-    put("project_name","Smart Invoice")
-    put("company_name","COMPANY NAME")
-    put("tax_default","0")
-    put("date_format","dd-mm-yy")
-    put("invoice_start","100")
-    put("logo_path","")
-    put("logo_show","1")
-    put("auto_create_folders","1")
-    put("output_folder","")
-    put("developer_name", "ISHTIAQ AHMAD MAGRAY")
-    put("developer_phone", "+923495820495")  # Change to your phone number  
-    put("contact_msg", "For new software development, contact the developer above.")  
-    put("growth_rate", "10")   # <-- یہ نیا اضافہ کریں
-    put("show_pending", "0")  # 0 = off, 1 = on
-    write_csv(SETTINGS, s, ["key","value"])
-init_settings()
+    defaults = {
+        "project_name": "Smart Invoice",
+        "company_name": "COMPANY NAME",
+        "tax_default": "0",
+        "date_format": "dd-mm-yy",
+        "invoice_start": "100",
+        "logo_path": "",
+        "logo_show": "1",
+        "auto_create_folders": "1",
+        "output_folder": "",
+        "developer_name": "ISHTIAQ AHMAD MAGRAY",
+        "developer_phone": "+923495820495",
+        "contact_msg": "For new software development, contact the developer above.",
+        "growth_rate": "10",
+        "show_pending": "0",
+        "app_password": "12345",
+        "security_question": "What is your favorite color?",
+        "security_answer": ""
+    }
+
+    con = db()
+    cur = con.cursor()
+    for k, v in defaults.items():
+        cur.execute("""
+            INSERT INTO settings (key, value)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO NOTHING
+        """, (k, v))
+    con.commit()
+    con.close()
 
 # ---------- Utils ----------
 def to_caps(s: str) -> str:
@@ -421,44 +602,34 @@ def safe_name(s: str) -> str:
 
 # ---------- Domain loaders ----------
 def load_products():
-    out = []
-    for r in read_csv(PRODUCTS):
-        if not r.get("name"):
-            continue
-        name = to_caps(r["name"])  # اب کیپیٹل ہو جائے گا
-        try:
-            up = float(r.get("unit_price","0") or "0")
-            pp = float(r.get("purchase_price","0") or "0")
-            st = float(r.get("stock","0") or "0")
-            mn = float(r.get("min_stock","0") or "0")
-        except:
-            up, pp, st, mn = 0.0, 0.0, 0.0, 0.0
-        out.append({
-            "name": name,
-            "unit_price": up,
-            "purchase_price": pp,
-            "stock": st,
-            "min_stock": mn
-        })
-    return out
-def load_customers():
-    out = []
-    for r in read_csv(CUSTOMERS):
-        if r.get("name"):
-            out.append({"name": to_caps(r["name"]), "address": to_caps(r.get("address","")), "phone": r.get("phone","")})
-    return out
+    con = db()
+    cur = con.cursor()
+    cur.execute("""
+        SELECT name, stock, unit_price, purchase_price, min_stock
+        FROM products
+    """)
+    rows = cur.fetchall()
+    con.close()
 
-def ensure_customer(name, address, phone):
-    name = to_caps(name)
-    address = to_caps(address)
-    rows = read_csv(CUSTOMERS)
-    for r in rows:
-        if to_caps(r["name"]) == name and to_caps(r.get("address","")) == address:
-            r["phone"] = phone
-            write_csv(CUSTOMERS, rows, ["name","address","phone"])
-            return
-    rows.append({"name": name, "address": address, "phone": phone})
-    write_csv(CUSTOMERS, rows, ["name","address","phone"])
+    return [{
+        "name": r[0],
+        "stock": r[1],
+        "unit_price": r[2],
+        "purchase_price": r[3],
+        "min_stock": r[4]
+    } for r in rows]
+
+def load_customers():
+    con = db()
+    cur = con.cursor()
+    cur.execute("SELECT name, address, phone FROM customers")
+    rows = cur.fetchall()
+    con.close()
+    return [{
+        "name": r[0],
+        "address": r[1],
+        "phone": r[2]
+    } for r in rows]
 
 # ---------- PDF helpers ----------
 PAGE_W, PAGE_H = A4
@@ -777,21 +948,26 @@ def home():
     now = datetime.datetime.now()
     cur_month = now.strftime("%B"); cur_year = now.year
     month_total = 0.0
-    for r in read_csv(INVOICES):
-        d = r.get("date","")
-        try:  
-            # پہلے نیا DB فارمیٹ try کریں  
-            dt = datetime.datetime.strptime(d, "%Y-%m-%d")  
-        except:  
-            try:  
-                dt = datetime.datetime.strptime(d, "%d-%m-%y")   # پرانا dd-mm-yy  
-            except:  
-                try:  
-                    dt = datetime.datetime.strptime(d, "%d-%m-%Y")  
-                except:  
-                    continue  
+
+    con = db()
+    cur = con.cursor()
+
+    cur.execute("""
+        SELECT date, total
+        FROM invoices
+    """)
+
+    rows = cur.fetchall()
+    con.close()
+
+    for d, total in rows:
+        try:
+            dt = datetime.datetime.fromisoformat(d)
+        except:
+            continue
+
         if dt.year == cur_year and dt.strftime("%B") == cur_month:
-            month_total += float(r.get("total","0") or 0)
+            month_total += float(total or 0)
 
     html = TPL_H + """
 <h2 style="text-align:center; color:#1565c0; font-size:32px; margin:40px 0; font-weight:bold;">
@@ -955,857 +1131,832 @@ def home():
 """ + TPL_F
     return render_template_string(html, project=get_setting("project_name"), month_total=f"{month_total:,.2f}")
 
-# ---------- Products ----------
+# ---------- Products (SQLITE) ----------
 @app.route("/products", methods=["GET","POST"])
 @login_required
 def products():
-    if request.method == "POST":
-        act = request.form.get("action", "")
-        rows = read_csv(PRODUCTS)
 
+    if request.method == "POST":
+        act = request.form.get("action","")
+        con = db()
+        cur = con.cursor()
+
+        # ---------- SAVE ----------
         if act == "save":
-            name = request.form.get("name", "").strip()
+            name = to_caps(request.form.get("name","").strip())
             if not name:
                 flash("Product name required")
                 return redirect(url_for("products"))
 
-            sell_price_input = request.form.get("unit_price", "").strip()
-            purchase_price_input = request.form.get("purchase_price", "").strip()  # نیا
-            add_stock_input = request.form.get("stock", "0").strip()
-            min_stock_input = request.form.get("min_stock", "0").strip()
+            sell_price_input = request.form.get("unit_price","").strip()
+            purchase_price_input = request.form.get("purchase_price","").strip()
+            add_stock_input = request.form.get("stock","0").strip()
+            min_stock_input = request.form.get("min_stock","0").strip()
 
             try:
-                add_stock = max(0.0, float(add_stock_input or "0"))
-                min_stock = max(0.0, float(min_stock_input or "0"))
+                add_stock = float(add_stock_input or 0)
+                min_stock = float(min_stock_input or 0)
             except:
                 flash("Invalid stock values")
                 return redirect(url_for("products"))
 
-            existing = None
-            for r in rows:
-                if r["name"].lower() == name.lower():
-                    existing = r
-                    break
+            cur.execute("""
+                SELECT unit_price, purchase_price, stock
+                FROM products WHERE name=?
+            """, (name,))
+            row = cur.fetchone()
 
-            if existing:
+            if row:
+                unit_price, purchase_price, stock = row
+
                 if sell_price_input:
-                    try:
-                        existing["unit_price"] = f"{float(sell_price_input):.2f}"
-                    except:
-                        flash("Invalid selling price")
-                        return redirect(url_for("products"))
-                if purchase_price_input:  # نیا
-                    try:
-                        existing["purchase_price"] = f"{float(purchase_price_input):.2f}"
-                    except:
-                        flash("Invalid purchase price")
-                        return redirect(url_for("products"))
+                    unit_price = float(sell_price_input)
+                if purchase_price_input:
+                    purchase_price = float(purchase_price_input)
 
-                current = float(existing.get("stock", "0") or "0")
-                existing["stock"] = f"{max(0.0, current + add_stock):.2f}"
-                existing["min_stock"] = f"{min_stock:.2f}"
+                stock = (stock or 0) + add_stock
+
+                cur.execute("""
+                    UPDATE products
+                    SET unit_price=?, purchase_price=?, stock=?, min_stock=?
+                    WHERE name=?
+                """,(unit_price, purchase_price, stock, min_stock, name))
                 flash(f"Updated: {name}")
 
             else:
                 if not sell_price_input or not purchase_price_input:
-                    flash("Both Selling & Purchase Price required for new product")
-                    return redirect(url_for("products"))
-                try:
-                    sell_price = float(sell_price_input)
-                    purchase_price = float(purchase_price_input)
-                except:
-                    flash("Invalid prices")
+                    flash("Selling & Purchase price required for new product")
                     return redirect(url_for("products"))
 
-                rows.append({
-                    "name": name,
-                    "unit_price": f"{sell_price:.2f}",
-                    "purchase_price": f"{purchase_price:.2f}",  # نیا
-                    "stock": f"{add_stock:.2f}",
-                    "min_stock": f"{min_stock:.2f}"
-                })
+                cur.execute("""
+                    INSERT INTO products
+                    (name, unit_price, purchase_price, stock, min_stock)
+                    VALUES (?,?,?,?,?)
+                """,(name, float(sell_price_input),
+                     float(purchase_price_input),
+                     add_stock, min_stock))
                 flash(f"New product added: {name}")
 
-            write_csv(PRODUCTS, rows, ["name","unit_price","purchase_price","stock","min_stock"])  # header update
+            con.commit()
+            con.close()
             return redirect(url_for("products"))
 
+        # ---------- DELETE ----------
         if act == "delete":
-            name_del = request.form.get("name_del", "").strip()
-            if name_del:
-          # Case-insensitive comparison
-                rows = [r for r in rows if r["name"].lower() != name_del.lower()]
-                write_csv(PRODUCTS, rows, ["name","unit_price","purchase_price","stock","min_stock"])
-                flash(f"Product deleted: {name_del}")
-            else:
-                flash("No product selected to delete")
+            name_del = to_caps(request.form.get("name_del",""))
+            cur.execute("DELETE FROM products WHERE name=?", (name_del,))
+            con.commit()
+            con.close()
+            flash(f"Deleted: {name_del}")
             return redirect(url_for("products"))
 
-    prods = load_products()
+    # ---------- LOAD PRODUCTS ----------
+    con = db()
+    cur = con.cursor()
+    cur.execute("""
+        SELECT name, unit_price, purchase_price, stock, min_stock
+        FROM products ORDER BY name
+    """)
+    rows = cur.fetchall()
+    con.close()
 
-    # load_products فنکشن کو بھی اپڈیٹ کریں (نیچے دیا گیا ہے)
+    prods = [{
+        "name":r[0],
+        "unit_price":r[1],
+        "purchase_price":r[2],
+        "stock":r[3],
+        "min_stock":r[4]
+    } for r in rows]
 
     html = TPL_H + """
 <h3>Products / Stock Management</h3>
 
-<div style="margin:20px 0;">
-  <!-- نیا: خوبصورت اور فوری فلٹر والا سرچ -->
-<div style="margin:30px 0; text-align:center;">
-  <input type="text" id="prodSearchBox" placeholder="🔍 Enter product name..." 
-         style="width:80%; max-width:600px; padding:14px; font-size:18px; border-radius:12px; border:2px solid #1976d2;">
-</div>
+<button class="btn" onclick="history.back()">⬅ Back</button>
 
-<script>
-document.getElementById('prodSearchBox').addEventListener('input', function() {
-  const query = this.value.toLowerCase().trim();
-  const rows = document.querySelectorAll('#prodTable tbody tr');
-  
-  rows.forEach(row => {
-    const productName = row.querySelector('td:first-child').textContent.toLowerCase();
-    if (query === '' || productName.includes(query)) {
-      row.style.display = '';
-    } else {
-      row.style.display = 'none';
-    }
-  });
-});
-</script>
-</div>
+<input type="text" id="search" placeholder="🔍 Search product..."
+       style="width:100%;padding:14px;margin:20px 0;">
 
 <form method="post">
-  <input type="hidden" name="action" value="save">
-  <div style="background:#f1f8e9; padding:20px; border-radius:12px; border:2px dashed #689f38; margin-bottom:25px;">
-    <div style="display:grid; grid-template-columns: 300px 150px 150px 150px 160px 160px auto; gap:15px; align-items:end;">
-      <div><label><strong>Product Name</strong></label>
-        <input name="name" id="pname" list="prodlist" placeholder="Type or select" required autocomplete="off" style="width:100%; padding:11px; font-size:15px;">
-        <datalist id="prodlist">
-          {% for p in prods %}
-            <option value="{{p.name}}" data-sell="{{p.unit_price}}" data-purchase="{{p.purchase_price or ''}}">
-          {% endfor %}
-        </datalist>
-      </div>
-      <div><label><strong>Selling Price</strong></label>
-        <input name="unit_price" id="sell_price" type="number" step="any" placeholder="New price" style="width:100%;">
-      </div>
-      <div><label><strong>Purchase Price</strong></label>
-        <input name="purchase_price" id="purchase_price" type="number" step="any" placeholder="Cost price" style="width:100%;">
-      </div>
-      <div><label><strong>Add Stock</strong></label>
-        <input name="stock" type="number" step="any" min="0" value="0">
-      </div>
-      <div><label><strong>Min Stock</strong></label>
-        <input name="min_stock" type="number" step="any" min="0">
-      </div>
-    </div> <!-- grid بند -->
+<input type="hidden" name="action" value="save">
 
-    <div style="text-align:center; margin-top:25px;">
-      <button type="submit" class="btn" style="background:#2e7d32; color:white; padding:16px 80px; font-size:20px; border-radius:12px; font-weight:bold; box-shadow:0 4px 10px rgba(0,0,0,0.15);">
-        Save Product / Update Stock
-      </button>
-    </div>
-  </div> <!-- background div -->
+<input name="name" list="plist" placeholder="Product name" required>
+<datalist id="plist">
+{% for p in prods %}
+<option value="{{p.name}}">
+{% endfor %}
+</datalist>
+
+<input name="unit_price" placeholder="Selling price">
+<input name="purchase_price" placeholder="Purchase price">
+<input name="stock" value="0" placeholder="Add stock">
+<input name="min_stock" value="0" placeholder="Min stock">
+
+<button class="btn" style="background:#2e7d32">Save</button>
 </form>
-<table id="prodTable">
-  <thead style="background:#1976d2; color:black:bold;">
-    <tr><th>Product</th><th>Selling Price</th><th>Purchase Price</th><th>Stock</th><th>Min Stock</th><th>Status</th><th>Delete</th></tr>
-  </thead>
-  <tbody>
-    {% for p in prods %}
-    <tr {% if p.stock <= p.min_stock %}style="background:#ffebee;"{% endif %}>
-      <td style="padding:10px; font-weight:600;">{{p.name}}</td>
-      <td>Rs {{'%.2f'|format(p.unit_price)}}</td>
-      <td>Rs {{'%.2f'|format(p.purchase_price or 0)}}</td>
-      <td style="text-align:center; font-weight:bold;">{{'%.2f'|format(p.stock)}}</td>
-      <td style="text-align:center;">{{'%.f'|format(p.min_stock)}}</td>
-      <td style="text-align:center;">
-        {% if p.stock <= p.min_stock %}<span style="color:red; font-weight:bold;">LOW!</span>{% else %}<span style="color:green;">OK</span>{% endif %}
-      </td>
-      <td>
-        <form method="post" style="display:inline;">
-          <input type="hidden" name="action" value="delete">
-          <input type="hidden" name="name_del" value="{{p.name}}">
-          <button class="btn" style="background:#c62828;" onclick="return confirm('Delete {{p.name}}?')">Delete</button>
-        </form>
-      </td>
-    </tr>
-    {% endfor %}
-  </tbody>
+
+<table id="ptable">
+<tr>
+<th>Name</th><th>Sell</th><th>Purchase</th>
+<th>Stock</th><th>Min</th><th>Status</th><th>Del</th>
+</tr>
+
+{% for p in prods %}
+<tr {% if p.stock <= p.min_stock %}style="background:#ffebee"{% endif %}>
+<td>{{p.name}}</td>
+<td>{{p.unit_price}}</td>
+<td>{{p.purchase_price}}</td>
+<td>{{p.stock}}</td>
+<td>{{p.min_stock}}</td>
+<td>{% if p.stock<=p.min_stock %}LOW{% else %}OK{% endif %}</td>
+<td>
+<form method="post">
+<input type="hidden" name="action" value="delete">
+<input type="hidden" name="name_del" value="{{p.name}}">
+<button class="btn" style="background:#c62828">X</button>
+</form>
+</td>
+</tr>
+{% endfor %}
 </table>
+
 <script>
-function selectProduct(el) {
-  document.getElementById('pname').value = el.dataset.name;
-  document.getElementById('sell_price').value = el.dataset.sell;
-  document.getElementById('purchase_price').value = el.dataset.purchase;
-  document.getElementById('filteredProducts').style.display = 'none';
+document.getElementById('search').oninput=e=>{
+ let q=e.target.value.toLowerCase();
+ document.querySelectorAll('#ptable tr').forEach((r,i)=>{
+  if(i==0) return;
+  r.style.display=r.innerText.toLowerCase().includes(q)?'':'none';
+ });
 }
-
-document.getElementById('pname').addEventListener('input', function() {
-  const query = this.value.toLowerCase().trim();
-  const container = document.getElementById('filteredProducts');
-  const options = container.querySelectorAll('.prod-option');
-  
-  if (query === '') {
-    container.style.display = 'none';
-    return;
-  }
-  
-  let hasMatch = false;
-  options.forEach(opt => {
-    const name = opt.dataset.name.toLowerCase();
-    if (name.includes(query)) {
-      opt.style.display = 'block';
-      hasMatch = true;
-    } else {
-      opt.style.display = 'none';
-    }
-  });
-  
-  container.style.display = hasMatch ? 'block' : 'none';
-});
-
-// باہر کلک کرنے پر لسٹ چھپ جائے
-document.addEventListener('click', function(e) {
-  if (!e.target.closest('#pname') && !e.target.closest('#filteredProducts')) {
-    document.getElementById('filteredProducts').style.display = 'none';
-  }
-});
-</script>
-<script>
-document.getElementById('pname').addEventListener('input', function() {
-  const val = this.value.trim().toLowerCase();
-  if (!val) return;
-  const opts = document.querySelectorAll('#prodlist option');
-  for (let opt of opts) {
-    if (opt.value.toLowerCase() === val.toLowerCase()) {
-      document.getElementById('sell_price').value = opt.dataset.sell || '';
-      document.getElementById('purchase_price').value = opt.dataset.purchase || '';
-      document.getElementById('sell_price').placeholder = 'Current: Rs ' + opt.dataset.sell;
-      document.getElementById('purchase_price').placeholder = 'Current: Rs ' + (opt.dataset.purchase || '0');
-      return;
-    }
-  }
-  document.getElementById('sell_price').value = '';
-  document.getElementById('purchase_price').value = '';
-  document.getElementById('sell_price').placeholder = 'Required';
-  document.getElementById('purchase_price').placeholder = 'Required';
-});
 </script>
 """ + TPL_F
 
     return render_template_string(html, prods=prods, project=get_setting("project_name"))
 
 
+
 # ---------- Customers ----------
-@app.route("/customers", methods=["GET","POST"])
+@app.route("/customers", methods=["GET", "POST"])
 @login_required
 def customers():
+    con = db()
+    cur = con.cursor()
+
+    selected_customer = None
+    ledger_data = None
+
     if request.method == "POST":
-        act = request.form.get("action","save")
-        if act == "save":
-            name = to_caps(request.form.get("name",""))
-            addr = to_caps(request.form.get("address",""))
-            phone = request.form.get("phone","")
-            if not name:
-                flash("Name required"); return redirect(url_for("customers"))
-            rows = read_csv(CUSTOMERS)
-            done = False
-            for r in rows:
-                if to_caps(r["name"]) == name and to_caps(r["address"]) == addr:
-                    r["phone"] = phone; done = True
-            if not done:
-                rows.append({"name": name, "address": addr, "phone": phone})
-            write_csv(CUSTOMERS, rows, ["name","address","phone"])
-            flash("Saved")
-            return redirect(url_for("customers"))
-        if act == "delete":
-            name_del = to_caps(request.form.get("name_del",""))
-            addr_del = to_caps(request.form.get("addr_del",""))
-            rows = [r for r in read_csv(CUSTOMERS) if not (to_caps(r["name"])==name_del and to_caps(r["address"])==addr_del)]
-            write_csv(CUSTOMERS, rows, ["name","address","phone"])
-            flash("Customer deleted")
-            return redirect(url_for("customers"))
-    custs = load_customers()
+        action = request.form.get("action", "")
+
+        if action == "save":
+            name = request.form.get("name", "").strip().title()
+            address = request.form.get("address", "").strip().title()
+            phone = request.form.get("phone", "").strip()
+
+            if not name or not address:
+                flash("Name and Address are required")
+                return redirect(url_for("customers"))
+
+            cur.execute("""
+                INSERT INTO customers (name, address, phone)
+                VALUES (?, ?, ?)
+                ON CONFLICT(name, address) DO UPDATE SET
+                    phone = excluded.phone
+            """, (name, address, phone))
+            con.commit()
+            flash("Customer saved / updated")
+
+        elif action == "delete":
+            name_del = request.form.get("name_del", "").strip().title()
+            addr_del = request.form.get("addr_del", "").strip().title()
+
+            if name_del and addr_del:
+                cur.execute(
+                    "DELETE FROM customers WHERE name = ? AND address = ?",
+                    (name_del, addr_del)
+                )
+                if cur.rowcount > 0:
+                    con.commit()
+                    flash("Customer deleted successfully")
+                else:
+                    flash("Customer not found")
+            else:
+                flash("Select both name and address to delete")
+
+        elif action == "show_ledger":
+            name = request.form.get("ledger_name", "").strip().title()
+            address = request.form.get("ledger_address", "").strip().title()
+
+            if name and address:
+                cur.execute(
+                    "SELECT name, address, phone FROM customers WHERE name=? AND address=?",
+                    (name, address)
+                )
+                cust = cur.fetchone()
+                if cust:
+                    selected_customer = {"name": cust[0], "address": cust[1], "phone": cust[2]}
+
+                    # Invoices
+                    cur.execute("""
+                        SELECT inv_no, date, total
+                        FROM invoices
+                        WHERE customer = ? AND customer_address = ?
+                        ORDER BY date DESC
+                    """, (name, address))
+                    invoices = cur.fetchall()
+
+                    # Payments (if you have payments table)
+                    cur.execute("""
+                        SELECT date, amount, method
+                        FROM payments
+                        WHERE inv_no IN (
+                            SELECT inv_no FROM invoices 
+                            WHERE customer = ? AND customer_address = ?
+                        )
+                        ORDER BY date DESC
+                    """, (name, address))
+                    payments = cur.fetchall()
+
+                    ledger_data = {
+                        "invoices": invoices,
+                        "payments": payments,
+                        "pending": get_pending(name, address)
+                    }
+
+    # Load all customers
+    cur.execute("SELECT name, address, phone FROM customers ORDER BY name, address")
+    all_customers = [{"name": r[0], "address": r[1], "phone": r[2]} for r in cur.fetchall()]
+
+    con.close()
+
     html = TPL_H + """
-<h3>Customers</h3>
-<form method="post" class="top">
-  <input type="hidden" name="action" value="save">
-  <input name="name" list="cust_names" placeholder="Customer" required>
-  <datalist id="cust_names">{% for c in custs %}<option value="{{c.name}}">{% endfor %}</datalist>
-  <input name="address" list="cust_addr" placeholder="Address" required>
-  <datalist id="cust_addr">{% for c in custs %}<option value="{{c.address}}">{% endfor %}</datalist>
-  <input name="phone" placeholder="Phone">
-  <button class="btn">Save / Update</button>
+<style>
+    .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+    .action-buttons { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 20px; }
+    .action-buttons button { flex: 1; min-width: 140px; padding: 12px; font-size: 1rem; }
+    .ledger-card { background: #f8f9fa; border-radius: 12px; padding: 20px; margin: 25px 0; box-shadow: 0 2px 10px rgba(0,0,0,0.08); }
+    .table-responsive { overflow-x: auto; }
+    .summary { background: #e3f2fd; padding: 16px; border-radius: 10px; margin-bottom: 20px; font-size: 1.1rem; }
+    @media (max-width: 768px) {
+        .form-grid { grid-template-columns: 1fr; }
+        .action-buttons { flex-direction: column; }
+        h2 { font-size: 1.6rem; text-align: center; }
+    }
+</style>
+
+<h2>Customers Management</h2>
+
+<!-- Add / Update Customer -->
+<form method="post" class="card" style="padding: 20px;">
+    <input type="hidden" name="action" value="save">
+    <div class="form-grid">
+        <div>
+            <label>Name *</label>
+            <input name="name" required placeholder="Customer name">
+        </div>
+        <div>
+            <label>Address *</label>
+            <input name="address" required placeholder="Full address">
+        </div>
+        <div>
+            <label>Phone</label>
+            <input name="phone" placeholder="Phone number">
+        </div>
+    </div>
+    <div class="action-buttons">
+        <button type="submit" class="btn" style="background: #1976d2; color: white;">Save Customer</button>
+    </div>
 </form>
 
-<form method="post" class="top">
-  <input type="hidden" name="action" value="delete">
-  <select name="name_del"><option value="">-- select customer name --</option>{% for c in custs %}<option>{{c.name}}</option>{% endfor %}</select>
-  <select name="addr_del"><option value="">-- select address --</option>{% for c in custs %}<option>{{c.address}}</option>{% endfor %}</select>
-  <button class="btn" onclick="return confirm('Delete selected customer?')">Delete</button>
+<!-- View Ledger -->
+<form method="post" class="card" style="margin: 25px 0; padding: 20px;">
+    <h3>View Customer Ledger</h3>
+    <input type="hidden" name="action" value="show_ledger">
+    <div class="form-grid">
+        <div>
+            <label>Customer Name</label>
+            <input list="cust_names" name="ledger_name" placeholder="Type name">
+            <datalist id="cust_names">
+                {% for c in all_customers %}
+                <option value="{{ c.name }}"></option>
+                {% endfor %}
+            </datalist>
+        </div>
+        <div>
+            <label>Address</label>
+            <input list="cust_addresses" name="ledger_address" placeholder="Type address">
+            <datalist id="cust_addresses">
+                {% for c in all_customers %}
+                <option value="{{ c.address }}"></option>
+                {% endfor %}
+            </datalist>
+        </div>
+    </div>
+    <div class="action-buttons">
+        <button type="submit" class="btn" style="background: #2e7d32; color: white;">Show Ledger</button>
+    </div>
 </form>
 
-<table style="width:100%; border-collapse:collapse;">
-  <thead style="background:#f0f0f0;">
-    <tr>
-      <th style="width:70px; text-align:center; padding:10px;">Sr. No.</th>
-      <th style="padding:10px;">Name</th>
-      <th style="padding:10px;">Address</th>
-      <th style="padding:10px;">Phone</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for c in custs %}
-    <tr style="border-bottom:1px solid #eee;">
-      <td style="text-align:center; padding:10px; font-weight:600; color:#1976d2;">{{ loop.index }}</td>
-      <td style="padding:10px;">{{ c.name }}</td>
-      <td style="padding:10px;">{{ c.address }}</td>
-      <td style="padding:10px;">{{ c.phone }}</td>
-    </tr>
-    {% endfor %}
-    {% if not custs %}
-    <tr>
-      <td colspan="4" style="text-align:center; padding:30px; color:#999;">No customers added yet</td>
-    </tr>
+<!-- Ledger Display -->
+{% if ledger_data %}
+<div class="ledger-card">
+    <h3>Ledger for: {{ selected_customer.name }} - {{ selected_customer.address }}</h3>
+    
+    <div class="summary">
+        <strong>Current Pending Balance:</strong> Rs {{ "%.2f"|format(ledger_data.pending) }}
+    </div>
+
+    <h4>Invoices</h4>
+    <div class="table-responsive">
+        <table style="width:100%; border-collapse: collapse;">
+            <thead style="background: #e3f2fd;">
+                <tr>
+                    <th>Invoice No</th>
+                    <th>Date</th>
+                    <th>Total</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for inv in ledger_data.invoices %}
+                <tr style="border-bottom: 1px solid #eee;">
+                    <td>{{ inv[0] }}</td>
+                    <td>{{ inv[1] }}</td>
+                    <td style="text-align: right;">Rs {{ "%.2f"|format(inv[2]) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% if ledger_data.payments %}
+    <h4 style="margin-top: 25px;">Payments</h4>
+    <div class="table-responsive">
+        <table style="width:100%; border-collapse: collapse;">
+            <thead style="background: #e8f5e9;">
+                <tr>
+                    <th>Date</th>
+                    <th>Amount</th>
+                    <th>Method</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for p in ledger_data.payments %}
+                <tr style="border-bottom: 1px solid #eee;">
+                    <td>{{ p[0] }}</td>
+                    <td style="text-align: right;">Rs {{ "%.2f"|format(p[1]) }}</td>
+                    <td>{{ p[2] or 'Cash' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
     {% endif %}
-  </tbody>
-</table>
-""" + TPL_F
-    return render_template_string(html, custs=custs, project=get_setting("project_name"))
+</div>
+{% endif %}
 
+<!-- All Customers List -->
+<h3>All Customers</h3>
+<div class="table-responsive">
+    <table style="width:100%; border-collapse: collapse;">
+        <thead style="background: #f0f0f0;">
+            <tr>
+                <th>Name</th>
+                <th>Address</th>
+                <th>Phone</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for c in all_customers %}
+            <tr style="border-bottom: 1px solid #eee;">
+                <td>{{ c.name }}</td>
+                <td>{{ c.address }}</td>
+                <td>{{ c.phone or '-' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<script>
+// Optional: simple client-side search if needed later
+</script>
+""" + TPL_F
+
+    return render_template_string(html, all_customers=all_customers, selected_customer=selected_customer, ledger_data=ledger_data, project=get_setting("project_name"))
+
+@app.route("/salesmen", methods=["GET","POST"])
+@login_required
+def salesmen():
+
+    con = db()
+    cur = con.cursor()
+
+    if request.method == "POST":
+        name = request.form.get("name","").strip().title()
+        if name:
+            try:
+                cur.execute("INSERT INTO salesmen(name) VALUES (?)", (name,))
+                con.commit()
+            except:
+                pass
+
+    cur.execute("SELECT id, name FROM salesmen ORDER BY name")
+    rows = cur.fetchall()
+    con.close()
+
+    html = TPL_H + """
+    <h3>Salesmen</h3>
+
+    <form method="post">
+      <input name="name" placeholder="Salesman name" required>
+      <button class="btn">Add</button>
+    </form>
+
+    <table>
+      <tr><th>ID</th><th>Name</th></tr>
+      {% for r in rows %}
+      <tr><td>{{r[0]}}</td><td>{{r[1]}}</td></tr>
+      {% endfor %}
+    </table>
+    """ + TPL_F
+
+    return render_template_string(html, rows=rows, project=get_setting("project_name"))
 
 # ---------- New Invoice ----------
 # ================== NEW & EDIT INVOICE - FINAL WORKING VERSION ==================
-# ================= Check if editing an existing invoice =================
-@app.route("/invoice/new", methods=["GET","POST"])
+@app.route("/invoice/new", methods=["GET", "POST"])
 @login_required
 def new_invoice():
-    prods = load_products()
-    custs = load_customers()
-    company = get_setting("company_name","Smart Invoice")
-    logo    = get_setting("logo_path","") or None
-    show_logo = (get_setting("logo_show","1") == "1")
-    tax_def = float(get_setting("tax_default","0") or "0")
+    today_iso = datetime.date.today().isoformat()
 
+    # Load products and salesmen
+    con = db()
+    cur = con.cursor()
+    cur.execute("SELECT name, stock, unit_price FROM products ORDER BY name")
+    products = [{"name": r[0], "stock": r[1] or 0, "price": r[2] or 0} for r in cur.fetchall()]
+
+    cur.execute("SELECT name FROM salesmen ORDER BY name")
+    salesmen = [r[0] for r in cur.fetchall()]
+
+    con.close()
+
+    # POST handling
     if request.method == "POST":
-        name = to_caps(request.form.get("name",""))
-        addr = to_caps(request.form.get("address",""))
-        phone = request.form.get("phone","")
-        tax_in = request.form.get("tax","")
-        tax = float(tax_in) if tax_in != "" else tax_def
-
-        # ===== Pending Amount Logic (نیا) =====
-        pending_input = request.form.get("pending_amount", "").strip()
         try:
-            pending_added = float(pending_input) if pending_input else 0.0
-        except:
-            pending_added = 0.0
+            customer = request.form.get("customer", "").strip().title()
+            address = request.form.get("address", "").strip().title()
+            phone = request.form.get("phone", "").strip()
+            salesman = request.form.get("salesman", "").strip()
+            date_str = request.form.get("date") or today_iso
+            pending_added = float(request.form.get("pending_added", "0") or "0")
 
-        # اگر سیٹنگ آن ہے تو پچھلا pending خود ڈال دو (اگر یوزر نے کچھ نہ بھرا)
-        if get_setting("show_pending", "0") == "1" and pending_added == 0.0:
-            pending_added = get_pending(name, addr)
-        # ======================================
+            # Basic validation
+            if not customer or not address:
+                flash("Customer name and address are required")
+                return redirect(url_for("new_invoice"))
 
-        lines = []
-        used = set()
-        idx = 0
-        err = None
-        any_line = False
-        while True:
-            prod = request.form.get(f"prod_{idx}")
-            qty  = request.form.get(f"qty_{idx}")
-            price_in = request.form.get(f"u_{idx}")
+            if not salesman:
+                flash("Salesman is required")
+                return redirect(url_for("new_invoice"))
 
-            if not prod:
-                break
-            any_line = True
-            if prod in used:
-                err = f"'{prod}' already added"; break
-            try:
-                q = float(qty)
-            except:
-                q = 0.0
-            try:
-                unit_price = float(price_in)
-            except:
-                unit_price = None
+            # Items with strict checks
+            items = []
+            seen_products = set()
+            i = 0
+            while True:
+                prod_name = request.form.get(f"prod_{i}")
+                if not prod_name:
+                    break
+                qty_str = request.form.get(f"qty_{i}", "0")
+                price_str = request.form.get(f"price_{i}", "0")
+                qty = float(qty_str) if qty_str else 0
+                price = float(price_str) if price_str else 0
 
-            info = next((p for p in prods if p["name"] == prod), None)
-            if not info:
-                err = "Select product from list"; break
-            if q <= 0:
-                err = "Quantity must be positive"; break
-            if unit_price is None:
-                unit_price = float(info["unit_price"])
+                if qty <= 0 or not prod_name:
+                    i += 1
+                    continue
 
-            if q > info["stock"]:
-                err = f"Insufficient stock for '{prod}' (have {info['stock']})"; break
-            lines.append({
-    "product": prod,
-    "qty": q,
-    "unit_price": unit_price
-})
+                # Duplicate check
+                if prod_name in seen_products:
+                    flash(f"Duplicate product '{prod_name}' not allowed in one invoice")
+                    return redirect(url_for("new_invoice"))
+                seen_products.add(prod_name)
 
-            used.add(prod)
-            idx += 1
+                # Stock check - prevent add if low
+                prod = next((p for p in products if p["name"] == prod_name), None)
+                if prod and qty > prod["stock"]:
+                    flash(f"Cannot add {prod_name}: Only {prod['stock']} in stock, requested {qty}")
+                    return redirect(url_for("new_invoice"))
 
-        if not any_line:
-            err = "Add at least one item"
-        if err:
-            flash(err); return redirect(url_for("new_invoice"))
+                items.append({"product": prod_name, "qty": qty, "price": price})
+                i += 1
 
-        inv_no = get_seq("invoice_no", int(get_setting("invoice_start","100")))
-        set_seq("invoice_no", inv_no + 1)
-        date_str_display = fmt_date()           # PDF اور ڈسپلے کے لیے dd-mm-yy  
-        date_str_db = fmt_date(for_db=True)     # SQLite کے لیے 2026-01-01  
-        gross = sum(float(li["qty"]) * float(li["unit_price"]) for li in lines)
-        total = gross * (1 + tax/100.0)
+            if not items:
+                flash("At least 1 product is required")
+                return redirect(url_for("new_invoice"))
 
-        # نیا: pending_added بھی سیو کرو
-        grand_total = gross + (gross * tax / 100) + pending_added
+            total = sum(it["qty"] * it["price"] for it in items)
 
-        append_csv(
-            INVOICES,
-            {"inv_no": inv_no, "date": date_str_display, "name": name, "address": addr, "phone": phone,
-            "tax": f"{tax:.2f}", "total": f"{grand_total:.2f}", "logo_path": (logo or ""), "pending_added": f"{pending_added:.2f}"},
-            ["inv_no","date","name","address","phone","tax","total","logo_path","pending_added"]
-        )
-        for li in lines:
-            append_csv(LINES, {"inv_no": inv_no, "product": li["product"], "qty": f"{li['qty']}", "unit_price": f"{li['unit_price']}"}, ["inv_no","product","qty","unit_price"])
+            # Invoice Number from settings (auto increase)
+            start_seq = int(get_setting("invoice_start", "1"))
+            ym = date_str[:7]
+            con = db()
+            cur = con.cursor()
+            cur.execute("SELECT MAX(CAST(SUBSTR(inv_no, 8) AS INTEGER)) FROM invoices WHERE inv_no LIKE ?", (ym + "-%",))
+            max_seq = cur.fetchone()[0] or (start_seq - 1)
+            next_seq = max_seq + 1
+            inv_no = f"{ym}-{next_seq:03d}"
 
-                # ===== یہ 12 لائنیں یہاں پیسٹ کرو (append_csv(LINES, ...) کے فوراً بعد) =====
-        # Sales Log میں بھی انٹری ڈالو (تاکہ Sales Record میں دکھے)
-        try:
-            conn = sqlite3.connect(DB_FILE)
-            c = conn.cursor()
-            for li in lines:
-                c.execute("""
+            # Save invoice
+            cur.execute("""
+                INSERT INTO invoices
+                (inv_no, date, customer, customer_address,phone,  salesman, total, pending_added)
+                VALUES (?,?,?,?,?,?,?,?)
+            """, (inv_no, date_str, customer, address, phone, salesman, total, pending_added))
+
+            for it in items:
+                cur.execute("INSERT INTO invoice_items (inv_no, product, qty, price) VALUES (?,?,?,?)",
+                            (inv_no, it["product"], it["qty"], it["price"]))
+
+                # Stock decrease
+                cur.execute("UPDATE products SET stock = COALESCE(stock, 0) - ? WHERE name = ?",
+                            (it["qty"], it["product"]))
+
+                # Sales log entry
+                cur.execute("""
                     INSERT INTO sales_log (date, inv_no, product, qty, sell_price)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (date_str_db, inv_no, li["product"], li["qty"], li["unit_price"]))
-            conn.commit()
-            conn.close()
+                    VALUES (?,?,?,?,?)
+                """, (date_str, inv_no, it["product"], it["qty"], it["price"]))
+
+            # Pending update
+            current_pending = get_pending(customer, address)
+            new_pending = current_pending + pending_added - total
+            update_pending(customer, address, max(0, new_pending))
+
+            # Add new customer
+            cur.execute("INSERT OR IGNORE INTO customers (name, address, phone) VALUES (?, ?, ?)",
+                        (customer, address, phone))
+
+            con.commit()
+            con.close()
+
+            # PDF Generation
+            dt = datetime.datetime.fromisoformat(date_str)
+            base_dir = ensure_out_dirs(dt.year, dt.strftime("%B"))
+            fn = f"INV_{inv_no}_{safe_name(customer)}_{safe_name(address)}.pdf"
+            pdf_path = base_dir / fn
+
+            salesman_dir = base_dir / safe_name(salesman)
+            salesman_dir.mkdir(exist_ok=True)
+            pdf_salesman = salesman_dir / fn
+
+            draw_invoice_pdf(
+                out_path=pdf_path,
+                company=get_setting("company_name", "COMPANY NAME"),
+                logo_path=get_setting("logo_path", ""),
+                show_logo=get_setting("logo_show", "1") == "1",
+                inv_no=inv_no,
+                date_str_display=fmt_date(dt.date()),
+                cust_name=customer,
+                cust_addr=address,
+                cust_phone=phone,
+                lines=[{"product": it["product"], "qty": it["qty"], "unit_price": it["price"]} for it in items],
+                tax_pct=float(get_setting("tax_default", 0)),
+                pending_added=pending_added
+            )
+
+            import shutil
+            shutil.copy(pdf_path, pdf_salesman)
+
+            flash(f"Invoice {inv_no} saved successfully!")
+            return f"""
+            <script>
+                localStorage.removeItem('invoice_draft');
+                window.open('{pdf_path}', '_blank');
+                window.print();
+                setTimeout(() => window.location = '/invoices', 1500);
+            </script>
+            """
+
         except Exception as e:
-            print("Sales log insert error:", e)  # کنسول پر دیکھنے کے لیے
-        # =============================================================================
-        ensure_customer(name, addr, phone)
-
-        # decrement stock
-        # ===== Decrement stock properly =====
-        rows = read_csv(PRODUCTS)
-        for li in lines:
-            prod_name = li["product"].strip()
-            qty_sold = float(li.get("qty", 0) or 0)
-            for r in rows:
-                if r["name"].strip().lower() == prod_name.lower():  # case-insensitive match
-                    current_stock = float(r.get("stock", 0) or 0)
-                    new_stock = max(0.0, current_stock - qty_sold)
-                    r["stock"] = f"{new_stock:.2f}"
-                    break  # product found, no need to loop further
-        write_csv(PRODUCTS, rows, ["name","unit_price","purchase_price","stock","min_stock"])
-
-
-        now = datetime.datetime.now()
-        year = now.year
-        month = now.strftime("%B")
-        out_dir = ensure_out_dirs(year, month)
-
-        pdf_name = f"INV_{inv_no}_{safe_name(name)}_{safe_name(addr)}.pdf"
-        out_path = out_dir / pdf_name
-        draw_invoice_pdf(out_path, company, logo, show_logo, inv_no, date_str_display, name, addr, phone, lines, tax, pending_added)
-
-        if not out_path.exists():
-            flash(f"Invoice saved but PDF not found: {out_path}")
+            flash(f"Error: {str(e)}")
             return redirect(url_for("new_invoice"))
 
-        pdf_url = url_for('view_pdf', y=year, m=month, fn=pdf_name)
-        redirect_url = url_for('new_invoice')
-
-        # Build HTML without using Python f-strings for JS braces. Use placeholder replacement.
-        html_template = """
-<!doctype html>
-<html><head><meta charset="utf-8"><title>Invoice Created</title></head>
-<body>
-<script>
-  try {
-    localStorage.removeItem('invoice_draft_v1');
-  } catch(e) {}
-  var w = window.open("{PDF_URL}", "_blank");
-  if (!w) {
-    window.location = "{PDF_URL}";
-  } else {
-    setTimeout(function(){ window.location = "{REDIRECT}"; }, 700);
-  }
-</script>
-<p>Invoice created. Opening PDF for print...</p>
-</body>
-</html>
-"""
-        html = html_template.replace("{PDF_URL}", pdf_url + "?print=1").replace("{REDIRECT}", redirect_url)
-        flash(f"Invoice #{inv_no} created.")
-        return html
-
-    # GET: render form (script uses localStorage but not inside f-strings)
-    prods = load_products(); custs = load_customers()
-    company = get_setting("company_name","Smart Invoice")
-    tax_def = float(get_setting("tax_default","0") or "0")
+    # GET - Form
     html = TPL_H + """
+<h2>New Invoice</h2>
 
-<h3>New Invoice</h3>
-<div class="flex">
-  <div style="flex:1">
-    <form method="post" id="invoiceForm">
-      <div class="top">
-  <div>
-    <input name="name" id="cname" list="cust_names" placeholder="Customer Name" required>
-    <datalist id="cust_names">{% for c in custs %}<option value="{{c.name}}">{% endfor %}</datalist>
-
-    <input name="address" id="caddr" list="cust_addr" placeholder="Address" required>
-    <datalist id="cust_addr">{% for c in custs %}<option value="{{c.address}}">{% endfor %}</datalist>
-
-    <input name="phone" id="cphone" placeholder="Phone">
-
-    <input name="tax" placeholder="Tax % (default {{tax_def}})" type="number" step="0.01">
-    <input name="pending_amount" id="pending_amount" type="number" step="any" min="0" placeholder="Pending Amount (auto if enabled)" style="width:220px; margin-left:10px;">
-  </div>
-  <div><span class="small">Company: {{company}}</span></div>
+<div style="margin-bottom:15px;">
+  <a href="{{ url_for('home') }}" class="btn" style="background:#757575; color:white;">← Back</a>
+  <button type="button" onclick="clearForm()" class="btn" style="background:#9e9e9e; color:white; margin-left:10px;">Clear Form</button>
 </div>
 
-      <table id="tbl">
-        <thead><tr><th>Product</th><th style="width:90px">Qty</th><th>Unit</th><th>Total</th><th></th></tr></thead>
-        <tbody></tbody>
-      </table>
-      <!-- Type through filter -->
-      <div style="margin:20px 0;">
-        <div style="position:relative;">
-          <input type="text" id="prodSearch" placeholder="Type product name......" autocomplete="off"
-                 style="width:100%; padding:14px; font-size:18px; border-radius:10px; border:2px solid #1976d2;">
-          <div id="prodDropdown" style="display:none; position:absolute; top:100%; left:0; right:0; max-height:400px; overflow-y:auto;
-               background:white; border:2px solid #1976d2; border-top:none; border-radius:0 0 10px 10px; z-index:1000;">
-            {% for p in prods %}
-              <div class="prod-item" data-name="{{p.name}}"
-                   style="padding:14px 16px; cursor:pointer; border-bottom:1px solid #eee;"
-                   onmouseover="this.style.background='#e3f2fd'"
-                   onmouseout="this.style.background='white'"
-                   onclick="addProductToInvoice('{{p.name}}')">
-                <strong>{{p.name}}</strong>
-              </div>
-            {% endfor %}
-          </div>
-        </div>
-      </div>
+<form method="post" id="invForm" class="card" style="padding:20px; background:white; border-radius:8px; box-shadow:0 2px 10px rgba(0,0,0,0.1);">
 
-      <script>
-      // سرچ باکس میں ٹائپ کرتے ہی لسٹ فلٹر ہو جائے
-      document.getElementById('prodSearch').addEventListener('input', function() {
-        const query = this.value.toLowerCase().trim();
-        const dropdown = document.getElementById('prodDropdown');
-        const items = dropdown.querySelectorAll('.prod-item');
-        
-        if (query === '') {
-          dropdown.style.display = 'none';
-          return;
-        }
-        
-        let visible = false;
-        items.forEach(item => {
-          if (item.dataset.name.toLowerCase().includes(query)) {
-            item.style.display = 'block';
-            visible = true;
-          } else {
-            item.style.display = 'none';
-          }
-        });
-        
-        dropdown.style.display = visible ? 'block' : 'none';
-      });
-
-      // باہر کلک کرنے پر لسٹ چھپ جائے
-      document.addEventListener('click', function(e) {
-        if (!e.target.closest('#prodSearch')) {
-          document.getElementById('prodDropdown').style.display = 'none';
-        }
-      });
-
-      // پروڈکٹ پر کلک کرنے سے رو میں شامل ہو جائے
-      function addProductToInvoice(name) {
-        addRow(); // پہلے سے موجود فنکشن جو نئی رو بناتا ہے
-        const lastIndex = row - 1;
-        const select = document.querySelector(`select[name="prod_${lastIndex}"]`);
-        if (select) {
-          select.value = name;
-          setInfo(select, lastIndex);  // پرائس خود بخود آ جائے گی
-          calc();
-        }
-        document.getElementById('prodSearch').value = '';
-        document.getElementById('prodDropdown').style.display = 'none';
-      }
-      </script>
-
-      <p class="small" id="sumline"></p>
-      <p>
-        <button type="button" class="btn" onclick="addRow()">+ Add Item</button>
-        <button type="button" class="btn" onclick="clearForm()">Clear Form</button>
-        <a class="link" href="{{url_for('home')}}">Back</a>
-      </p>
-
-      <p><button class="btn">Save & PDF</button></p>
-    </form>
-  </div>
-
-  <div class="side">
-    <div class="card"><h3>Customer History & Pending</h3>
-      <div id="hist" class="small">Type name & address…</div>
+  <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:16px;">
+    <div>
+      <label>Customer Name *</label>
+      <input name="customer" required placeholder="Enter name" autofocus>
+    </div>
+    <div>
+      <label>Address *</label>
+      <input name="address" required placeholder="Full address">
+    </div>
+    <div>
+      <label>Phone</label>
+      <input name="phone" placeholder="0300-xxxxxxx">
+    </div>
+    <div>
+      <label>Date</label>
+      <input type="date" name="date" value="{{ today }}">
+    </div>
+    <div>
+      <label>Salesman *</label>
+      <select name="salesman" required>
+        <option value="">-- Select --</option>
+        {% for s in salesmen %}
+          <option value="{{ s }}">{{ s }}</option>
+        {% endfor %}
+      </select>
     </div>
   </div>
-</div>
+
+  <div id="pendingSection" style="display:none; background:#fff8e1; border-left:6px solid #ffb300; padding:16px; margin:20px 0; border-radius:4px;">
+    <strong>Previous Pending:</strong> Rs <span id="pendingAmt">0.00</span><br>
+    <label style="margin-top:8px;">Add/Adjust:</label>
+    <input type="number" step="0.01" name="pending_added" id="pendingInput" value="0.00" style="width:140px; padding:8px;">
+    <small>(Positive = add to bill, Negative = reduce)</small>
+  </div>
+
+  <table id="itemTable" style="width:100%; margin:20px 0; border-collapse:collapse;">
+    <thead style="background:#e8f5e9;">
+      <tr>
+        <th>Product</th>
+        <th>Qty</th>
+        <th>Price</th>
+        <th>Total</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <div style="text-align:right; font-size:1.5em; font-weight:bold; margin:20px 0;">
+    Grand Total: Rs <span id="totalDisplay">0.00</span>
+  </div>
+
+  <div style="display:flex; gap:10px; flex-wrap:wrap;">
+    <button type="button" onclick="addRow()" class="btn" style="background:#43a047; color:white;">+ Add Item</button>
+    <button type="button" onclick="previewInvoice()" class="btn" style="background:#ff9800; color:white;">Preview</button>
+    <button type="submit" class="btn" style="background:#1976d2; color:white;">Save & Print</button>
+  </div>
+
+</form>
+
 <script>
-function validateForm() {
-  const rows = document.querySelectorAll("#tbl tbody tr");
+// Global variables
+const products = {{ products | tojson | safe }};
+let rowId = 0;
 
-  for (let r of rows) {
-    const select     = r.querySelector("select");
-    const priceInput = r.querySelector("input[name^='u_']");  // name سے لیا — step 1 کی وجہ سے کام کرے گا
-
-    if (!select || !select.value) continue;
-
-    const minPrice     = parseFloat(priceInput.dataset.minPrice) || 0;
-    const currentPrice = parseFloat(priceInput.value) || 0;
-
-    if (currentPrice > 0 && currentPrice < minPrice) {
-      alert(`غلطی: "${select.value}" کی سیلنگ پرائس خریداری قیمت سے کم نہیں ہو سکتی!\nکم از کم: Rs ${minPrice}`);
-
-      // یہ تین لائنیں روکنے میں مدد دیں گی
-      priceInput.focus();
-      priceInput.select();              // متن سلیکٹ ہو جائے
-      priceInput.style.border = "3px solid red";  // زیادہ نمایاں
-
-      return false;   // یہ لائن فارم کو روک دے گی
-    }
-  }
-
-  // اگر کوئی غلطی نہ ہو تو فارم جانے دیں
-  return true;
-// فارم submit کو مکمل کنٹرول کرنے والا کوڈ
-document.addEventListener('DOMContentLoaded', function() {
-    const form = document.getElementById('invoiceForm');
-    if (!form) return;
-
-    form.addEventListener('submit', function(e) {
-        // پہلے موجودہ validation (اگر ہے تو)
-        if (typeof validateForm === 'function' && !validateForm()) {
-            e.preventDefault();
-            return;
-        }
-
-        // pending چیک
-        const pendingInput = document.getElementById('pending_amount');
-        if (!pendingInput) return; // اگر فیلڈ نہ ملے تو چھوڑ دو
-
-        let pending = parseFloat(pendingInput.value) || 0;
-
-        if (pending > 0) {
-            const message = `پچھلا بقایا: Rs ${pending.toFixed(2)}\nکیا یہ رقم شامل کرکے انوائس بنائیں؟`;
-
-            if (!confirm(message)) {
-                // No → pending کو 0 کر دو
-                pendingInput.value = "0";
-                pendingInput.focus(); // optional: واپس فیلڈ پر لے جاؤ
-            }
-            // Yes → کچھ نہ کرو، ویلیو ویسی ہی رہے گی
-        }
-
-        // فارم کو جانے دو
-        // e.preventDefault() یہاں نہیں لگائیں گے — صرف غلطی پر روکا تھا
-    });
+// Title Case
+function titleCase(str) {
+  return (str || "").replace(/\\w\\S*/g, t => t.charAt(0).toUpperCase() + t.substr(1).toLowerCase());
+}
+['customer','address'].forEach(n => {
+  const el = document.querySelector(`[name="${n}"]`);
+  if (el) el.addEventListener('input', () => el.value = titleCase(el.value));
 });
 
-</script>
-<script>
-const prods = {{ prods|tojson }};
-let row=0;
-const DKEY = "invoice_draft_v1";
-
-function saveDraft(){
-  try {
-    const cname = document.getElementById('cname').value||"";
-    const caddr = document.getElementById('caddr').value||"";
-    const cphone = document.getElementById('cphone').value||"";
-    const tax = document.querySelector('input[name="tax"]').value||"";
-    const rows = [];
-    for(const r of document.querySelectorAll("#tbl tbody tr")){
-      const sel = r.querySelector("select");
-      const qty = r.querySelector("input[name^='qty_']");
-      if(sel && sel.value){
-        rows.push({product: sel.value, qty: qty.value||""});
-      }
-    }
-    localStorage.setItem(DKEY, JSON.stringify({name:cname,address:caddr,phone:cphone,tax:tax,rows:rows}));
-  } catch(e) { console.error("saveDraft", e); }
-}
-
-function restoreDraft(){
-  try {
-    const raw = localStorage.getItem(DKEY);
-    if(!raw) return false;
-    const o = JSON.parse(raw);
-    if(o.name) document.getElementById('cname').value = o.name;
-    if(o.address) document.getElementById('caddr').value = o.address;
-    if(o.phone) document.getElementById('cphone').value = o.phone;
-    if(o.tax) document.querySelector('input[name="tax"]').value = o.tax;
-    const tb=document.querySelector("#tbl tbody"); tb.innerHTML=""; row=0;
-    if(o.rows && o.rows.length){
-      for(const r of o.rows){
-        addRow();
-        const i = row-1;
-        const sel = document.querySelector(`select[name="prod_${i}"]`);
-        const qty = document.querySelector(`input[name="qty_${i}"]`);
-        if(sel) sel.value = r.product;
-        if(qty) qty.value = r.qty;
-        setTimeout(()=>{ if(document.querySelector(`select[name="prod_${i}"]`)) setInfo(document.querySelector(`select[name="prod_${i}"]`), i); calc(); }, 10);
-      }
-    } else {
-      addRow();
-    }
-    return true;
-  } catch(e){ console.error("restoreDraft", e); return false; }
-}
-
-function addRow(){
-  const tb=document.querySelector("#tbl tbody");
-  const tr=document.createElement("tr");
-  tr.innerHTML=`
-    <td>
-      <select name="prod_${row}" onchange="setInfo(this, ${row})" required style="min-width:100%">
-        <option value="">-- select --</option>
-        ${prods.map(p=>`<option value="${p.name}">${p.name}</option>`).join('')}
-      </select>
-    </td>
-    <td><input name="qty_${row}" type="number" min="0" step="any" inputmode="decimal" required oninput="calc()"></td>
-    <td><input name="u_${row}" id="u_${row}" type="number" step="any" oninput="calc()" style="font-weight:bold;"></td>
-    <td><input id="t_${row}" disabled></td>
-    <td><button type="button" class="btn" onclick="this.closest('tr').remove(); calc(); saveDraft();">X</button></td>
+// Add Row
+function addRow() {
+  const tbody = document.querySelector("#itemTable tbody");
+  const tr = document.createElement("tr");
+  tr.innerHTML = `
+    <td><input list="pdl${rowId}" name="prod_${rowId}" placeholder="Type product..." required style="width:100%;">
+        <datalist id="pdl${rowId}"></datalist></td>
+    <td><input type="number" name="qty_${rowId}" min="0.01" step="any" value="1" style="width:80px;" oninput="calc(this)"></td>
+    <td><input type="number" name="price_${rowId}" step="0.01" style="width:80px;" oninput="calc(this)"></td>
+    <td class="rtotal" style="text-align:right; font-weight:bold;">0.00</td>
+    <td><button type="button" onclick="this.parentElement.parentElement.remove(); calcGrand()" style="background:#ef5350;color:white;border:none;padding:4px 8px;border-radius:4px;">×</button></td>
   `;
-  tb.appendChild(tr); row++; calc(); saveDraft();
-}
-function setInfo(sel, i) {
-  const p = prods.find(x => x.name === sel.value);
-  const u = document.getElementById('u_' + i);
-  if (p) {
-    u.value = p.unit_price;
-    u.dataset.minPrice = p.purchase_price || 0;  // کم سے کم پرائس سیٹ کر دی
-  } else {
-    u.value = "";
-    u.dataset.minPrice = 0;
-  }
-  calc(); 
-  loadHist(); 
-  saveDraft();
-  
-  // اگر یوزر دستی پرائس کم ڈالے تو الرٹ
-    u.addEventListener('input', function() {
-    const minPrice = parseFloat(this.dataset.minPrice) || 0;
-    const current  = parseFloat(this.value) || 0;
+  tbody.appendChild(tr);
 
-    if (current > 0 && current < minPrice) {
-      this.style.border = "2px solid red";
-    } else {
-      this.style.border = "";
-    }
-    calc();
+  const dl = document.getElementById(`pdl${rowId}`);
+  products.forEach(p => {
+    let opt = document.createElement("option");
+    opt.value = p.name;
+    opt.dataset.price = p.price;
+    opt.dataset.stock = p.stock;
+    opt.text = `${p.name} (Stock: ${p.stock})`;
+    dl.appendChild(opt);
   });
+
+  const prodIn = tr.querySelector('input[list^="pdl"]');
+  prodIn.addEventListener("input", function(){
+    let match = products.find(p => p.name === this.value.trim());
+    if (match) {
+      let priceEl = this.closest("tr").querySelector('[name^="price_"]');
+      priceEl.value = match.price.toFixed(2);
+      calc(priceEl);
+      let qtyEl = this.closest("tr").querySelector('[name^="qty_"]');
+      if (parseFloat(qtyEl.value) > parseFloat(match.stock)) {
+        alert(`Low Stock! Available: ${match.stock}, Requested: ${qtyEl.value}`);
+      }
+    }
+  });
+
+  rowId++;
 }
-function calc(){
+
+// Calculations
+function calc(el) {
+  let tr = el.closest("tr");
+  let q = parseFloat(tr.querySelector('[name^="qty_"]').value) || 0;
+  let p = parseFloat(tr.querySelector('[name^="price_"]').value) || 0;
+  tr.querySelector(".rtotal").textContent = (q * p).toFixed(2);
+  calcGrand();
+}
+
+function calcGrand() {
   let sum = 0;
-  let total_qty = 0;  // نیا: کل qty جمع کرنے کے لیے
-  const rows = [...document.querySelectorAll("#tbl tbody tr")];
-  const names = [];
+  document.querySelectorAll(".rtotal").forEach(td => sum += parseFloat(td.textContent)||0);
+  document.getElementById("totalDisplay").textContent = sum.toFixed(2);
+}
 
-  for(const r of rows){
-    const sel = r.querySelector("select");
-    const qty = r.querySelector("input[name^='qty_']");
-    const u = r.querySelector("input[id^='u_']");
-    const t = r.querySelector("input[id^='t_']");
+// Pending Fetch
+async function fetchPending() {
+  let c = document.querySelector('[name="customer"]').value.trim();
+  let a = document.querySelector('[name="address"]').value.trim();
+  if (!c || !a) return;
 
-    if(!sel || !qty || !u) continue;
+  try {
+    let resp = await fetch(`/api/pending?customer=${encodeURIComponent(c)}&address=${encodeURIComponent(a)}`);
+    let data = await resp.json();
+    let pend = data.pending || 0;
 
-    if(sel.value && names.includes(sel.value)){
-      alert(sel.value + " already added.");
-      sel.value = "";
-      saveDraft();
-      return;
+    let sec = document.getElementById("pendingSection");
+    let amt = document.getElementById("pendingAmt");
+    let inp = document.getElementById("pendingInput");
+
+    if (pend > 0) {
+      amt.textContent = pend.toFixed(2);
+      inp.value = pend.toFixed(2);
+      sec.style.display = "block";
+    } else {
+      sec.style.display = "none";
+      inp.value = "0.00";
     }
-    if(sel.value) names.push(sel.value);
-
-    const q = parseFloat(qty.value || "0");
-    const up = parseFloat(u.value || "0");
-
-    t.value = (isNaN(q) || isNaN(up)) ? "" : (q * up).toFixed(2);
-    sum += (isNaN(q) || isNaN(up)) ? 0 : q * up;
-    total_qty += isNaN(q) ? 0 : q;  // qty جمع کرو
+  } catch(e) {
+    console.log("Pending fetch failed:", e);
   }
+}
 
-  // اب دونوں دکھاؤ: کل qty اور کل رقم
-  document.getElementById("sumline").innerHTML = 
-    `<strong>Total Qty: ${total_qty.toFixed(2)}</strong> &nbsp;&nbsp;&nbsp; 
-     <strong>Current Total: Rs ${sum.toFixed(2)}</strong>`;
-
-  saveDraft();
-}
-function validateForm(){
-  const firstLine=document.querySelector("#tbl tbody tr");
-  if(!firstLine){ alert("Add at least one item"); return false; }
-  const rows=[...document.querySelectorAll("#tbl tbody tr")];
-  for(const r of rows){
-    const sel=r.querySelector("select"); const qty=r.querySelector("input[name^='qty_']");
-    if(sel && sel.value){
-      const p = prods.find(x=>x.name===sel.value);
-      const q = parseFloat(qty.value||"0");
-      if(p && q > p.stock){ alert("Insufficient stock for "+p.name+" (have "+p.stock+")"); return false; }
+// Draft Save
+const draftKeys = ["customer","address","phone","salesman","date"];
+window.addEventListener("load", () => {
+  draftKeys.forEach(k => {
+    let el = document.querySelector(`[name="${k}"]`);
+    if (el) {
+      let v = localStorage.getItem("invDraft_" + k);
+      if (v) el.value = v;
     }
-  }
-  return true;
-}
-function clearForm(){
-  if(!confirm("Clear form? Unsaved data will be lost.")) return;
-  document.getElementById('invoiceForm').reset();
-  const tb=document.querySelector("#tbl tbody"); tb.innerHTML="";
-  row=0; addRow(); document.getElementById('hist').innerText='Type name & address…'; document.getElementById('sumline').innerText='';
-  try{ localStorage.removeItem(DKEY); } catch(e){}
-}
-function loadHist(){
-  const n=document.getElementById('cname').value.trim(), a=document.getElementById('caddr').value.trim();
-  if(!n||!a){ document.getElementById('hist').innerText='Type name & address…'; return; }
-  fetch(`/api/history?name=${encodeURIComponent(n)}&address=${encodeURIComponent(a)}`).then(r=>r.json()).then(d=>{
-    if(d.rows.length==0){ document.getElementById('hist').innerText='No history yet'; return; }
-    let html = '<p><strong>Pending: Rs ' + (d.pending||0).toFixed(2) + '</strong></p>';
-    // Auto fill pending if setting is on
-    const pendField = document.getElementById('pending_amount');
-    if (pendField && (pendField.value === '' || pendField.value === '0')) {
-      pendField.value = (d.pending || 0).toFixed(2);
-    }
-    html += '<table><tr><th>Inv#</th><th>Date</th><th>Total</th><th>Received</th><th>Pending</th><th>PDF</th></tr>';
-    for(const r of d.rows){
-      html += `<tr><td>${r.inv_no}</td><td>${r.date}</td><td>${r.total}</td><td>${r.received.toFixed(2)}</td><td>${r.pending.toFixed(2)}</td><td><a class="link" target="_blank" href="${r.pdf}">PDF</a></td></tr>`;
-    }
-    html += '</table>';
-    document.getElementById('hist').innerHTML = html;
   });
-}
-document.addEventListener('DOMContentLoaded', function(){
-  const ok = restoreDraft();
-  if(!ok){
-    const tb=document.querySelector("#tbl tbody");
-    if(!tb.querySelector("tr")) addRow();
-  }
+  addRow();
+  fetchPending();
 });
-document.getElementById('cname').addEventListener('input', saveDraft);
-document.getElementById('caddr').addEventListener('input', saveDraft);
-document.getElementById('cphone').addEventListener('input', saveDraft);
-document.querySelector('input[name="tax"]').addEventListener('input', saveDraft);
-</script>
-""" + TPL_F
 
-    return render_template_string(html, prods=prods, custs=custs,
-        company=company, tax_def=tax_def, project=get_setting("project_name"))
+draftKeys.forEach(k => {
+  let el = document.querySelector(`[name="${k}"]`);
+  if (el) el.addEventListener("input", () => localStorage.setItem("invDraft_" + k, el.value));
+});
+
+document.querySelector('[name="customer"]').addEventListener("change", fetchPending);
+document.querySelector('[name="address"]').addEventListener("change", fetchPending);
+
+document.getElementById("invForm").addEventListener("submit", () => {
+  draftKeys.forEach(k => localStorage.removeItem("invDraft_" + k));
+}); 
+
+// Clear Form
+function clearForm() {
+  if (confirm("Clear all fields?")) {
+    document.getElementById("invForm").reset();
+    document.querySelector("#itemTable tbody").innerHTML = "";
+    rowId = 0;
+    addRow();
+    draftKeys.forEach(k => localStorage.removeItem("invDraft_" + k));
+    document.getElementById("pendingSection").style.display = "none";
+    calcGrand();
+  }
+}
+
+// Preview (simulate preview)
+function previewInvoice() {
+  alert("Preview: Invoice ready for review.\\n\\nCustomer: " + document.querySelector('[name="customer"]').value + "\\nTotal: Rs " + document.getElementById("totalDisplay").textContent + "\\n\\nActual PDF will generate on Save.");
+}
+</script>
+    """ + TPL_F
+
+    return render_template_string(html, products=products, salesmen=salesmen, today=today_iso, project=get_setting("project_name"))
 
 ################## receive-offline
 @app.route("/receive-offline", methods=["POST"])
@@ -1814,518 +1965,497 @@ def receive_offline():
     print("RECEIVED OFFLINE DATA:", data)
     return {"status": "ok", "received": len(data)}
 
-################## INVENTORY SYSTEM ##################
-
-import json
-import os
-
-INV_PATH = "data/inventory.json"
-
-
-
-# Create or Load Inventory File
-def load_inventory():
-    if not os.path.exists(INV_PATH):
-        return []
-
-    try:
-        with open(INV_PATH, "r") as f:
-            return json.load(f)
-    except:
-        return []
-
-
-# Save Inventory (Add new record)
-def save_inventory(product, qty, purchase_price):
-    qty = float(qty)
-    purchase_price = float(purchase_price)
-
-    items = load_inventory()
-
-    items.append({
-        "product": product,
-        "qty": qty,
-        "purchase_price": purchase_price
-    })
-
-    with open(INV_PATH, "w") as f:
-        json.dump(items, f, indent=4)
-
-
-
-# ---------------- INVENTORY PAGE ----------------
-@app.route("/inventory")
-@login_required
-def inventory():
-    return "<h1>Inventory Page Coming Soon</h1><a href='/'>Back to Home</a>"
-    message = ""
-
-    if request.method == "POST":
-        product = request.form.get("product")
-        qty = request.form.get("qty")
-        purchase_price = request.form.get("purchase_price")
-
-        if product and qty and purchase_price:
-            try:
-                save_inventory(product, qty, purchase_price)
-                message = "Item added successfully."
-            except Exception as e:
-                message = f"Error: {str(e)}"
-        else:
-            message = "All fields are required."
-
-    items = load_inventory()
-    return render_template("inventory.html", items=items, message=message)
 
 # ---------- API endpoints ----------
 @app.get("/api/history")
 @login_required
 def api_history():
-    name=to_caps(request.args.get("name","")); addr=to_caps(request.args.get("address",""))
-    invs = [r for r in read_csv(INVOICES) if to_caps(r["name"])==name and to_caps(r["address"])==addr]
-    pays = read_csv(PAYMENTS)
-    pay_map = {}
-    for p in pays:
-        try: i=int(p["inv_no"]); pay_map[i]=pay_map.get(i,0.0)+float(p.get("amount","0") or 0)
-        except: pass
-    out=[]; total_pending = 0.0
-    for r in invs[-50:]:
-        inv = int(r["inv_no"])
-        total = float(r.get("total","0") or 0)
-        recvd = pay_map.get(inv,0.0)
-        pend = max(total - recvd, 0.0)
-        total_pending += pend
-        try:
-            d=r["date"]
-            if "-" in d and len(d.split("-")[2])==2:
-                dt=datetime.datetime.strptime(d,"%d-%m-%y")
-            elif "-" in d and len(d.split("-")[2])==4:
-                dt=datetime.datetime.strptime(d,"%d-%m-%Y")
-            else:
-                dt=datetime.datetime.strptime(d,"%Y-%m-%d")
-            y=dt.year; m=dt.strftime("%B")
-        except:
-            now=datetime.datetime.now(); y=now.year; m=now.strftime("%B")
-        fn = f"INV_{r['inv_no']}_{safe_name(name)}_{safe_name(addr)}.pdf"
-        out.append({"inv_no": inv, "date": r["date"], "total": total, "received": recvd, "pending": pend, "pdf": url_for("open_pdf_path", y=y, m=m, fn=fn)})
-    return jsonify({"rows":out, "pending": total_pending})
 
+    name = to_caps(request.args.get("name","").strip())
+    addr = to_caps(request.args.get("address","").strip())
+
+    con = db()
+    cur = con.cursor()
+
+    # invoices + payments join
+    cur.execute("""
+        SELECT
+            i.inv_no,
+            i.date,
+            i.total,
+            IFNULL(SUM(p.amount), 0)
+        FROM invoices i
+        LEFT JOIN payments p ON p.inv_no = i.inv_no
+        WHERE i.customer = ? AND i.customer_address = ?
+        GROUP BY i.inv_no
+        ORDER BY i.inv_no DESC
+        LIMIT 50
+    """, (name, addr))
+
+    rows = cur.fetchall()
+    con.close()
+
+    out = []
+    total_pending = 0.0
+
+    for inv_no, date, total, received in rows:
+        pending = max((total or 0) - (received or 0), 0)
+        total_pending += pending
+
+        # year / month for pdf path
+        try:
+            dt = datetime.datetime.strptime(date, "%Y-%m-%d")
+        except:
+            dt = datetime.datetime.now()
+
+        y = dt.year
+        m = dt.strftime("%B")
+
+        fn = f"INV_{inv_no}_{safe_name(name)}_{safe_name(addr)}.pdf"
+
+        out.append({
+            "inv_no": inv_no,
+            "date": date,
+            "total": total,
+            "received": received,
+            "pending": pending,
+            "pdf": url_for(
+                "open_pdf_path",
+                y=y,
+                m=m,
+                fn=fn
+            )
+        })
+
+    return jsonify({
+        "rows": out,
+        "pending": round(total_pending, 2)
+    })
 @app.route("/api/pending")
 @login_required
 def api_pending():
-    name = to_caps(request.args.get("name",""))
-    addr = to_caps(request.args.get("address",""))
+
+    name = to_caps(request.args.get("name","").strip())
+    addr = to_caps(request.args.get("address","").strip())
+
     if not name or not addr:
         return jsonify({"pending": 0.0})
 
-    invs = read_csv(INVOICES)
-    pays = read_csv(PAYMENTS)
-    pay_map = {}
-    for p in pays:
-        try:
-            i = int(p["inv_no"])
-            pay_map[i] = pay_map.get(i, 0.0) + float(p.get("amount",0) or 0)
-        except: pass
+    con = db()
+    cur = con.cursor()
 
-    pending = 0.0
-    for inv in invs:
-        if to_caps(inv.get("name","")) == name and to_caps(inv.get("address","")) == addr:
-            try:
-                total = float(inv.get("total",0) or 0)
-                inv_no = int(inv.get("inv_no",0))
-                pending += max(total - pay_map.get(inv_no, 0), 0, 0)
-            except: pass
-    return jsonify({"pending": round(pending, 2)})
+    cur.execute("""
+        SELECT
+            SUM(i.total - IFNULL(paid.total_paid,0))
+        FROM invoices i
+        LEFT JOIN (
+            SELECT inv_no, SUM(amount) total_paid
+            FROM payments
+            GROUP BY inv_no
+        ) paid ON paid.inv_no = i.inv_no
+        WHERE i.customer = ? AND i.customer_address = ?
+    """, (name, addr))
+
+    val = cur.fetchone()[0]
+    con.close()
+
+    return jsonify({
+        "pending": round(val or 0.0, 2)
+    })
+
 
 # ---------- Payments ----------
 # ================================================
-@app.route("/payments", methods=["GET","POST"])
+# ---------- PAYMENTS (SQLITE) ----------
+@app.route("/payments", methods=["GET"])
 @login_required
 def payments():
-    invs = read_csv(INVOICES)       # <--- یہ لائن لازمی شامل کریں
-    pays = read_csv(PAYMENTS)
-    if request.method == "POST":
-        action = request.form.get("action","")
-        
-        # Bulk adjustment with method selection
-        if action == "bulk_set":
-            pays = read_csv(PAYMENTS)
-            modified = 0
-            selected_method = request.form.get("payment_method", "Cash")  # نیا: میتھڈ منتخب
-                        # پہلے remarks save کریں
-            for key, val in request.form.items():
-                if key.startswith("remark_"):
-                    try:
-                        inv_no = int(key.split("_")[-1])  # remark_105 → 105
-                        new_remark = val.strip()
-                        # انوائس میں remarks اپڈیٹ کریں
-                        for inv in invs:
-                            if int(inv.get("inv_no", 0) or 0) == inv_no:
-                                inv["remarks"] = new_remark
-                                break
-                    except:
-                        pass
-            # remarks save ہو گئیں تو INVOICES فائل لکھ دیں
-            write_csv(INVOICES, invs, ["inv_no","date","name","address","phone","tax","total","logo_path","pending_added","remarks"])
-            modified = 1  # تاکہ flash میسج آئے
-            for key, val in request.form.items():
-                if not key.startswith("set_received_"): 
-                    continue
-                try:
-                    inv_no = int(key.split("_")[-1])
-                    desired = float(val or 0)
-                except: 
-                    continue
-                
-                # موجودہ received کا حساب
-                current = 0.0
-                for p in pays:
-                    try:
-                        if int(p.get("inv_no","")) == inv_no:
-                            current += float(p.get("amount","0") or 0)
-                    except: 
-                        continue
-                
-                diff = round(desired - current, 2)
-                if abs(diff) >= 0.005:
-                    # نیا adjustment payment ریکارڈ کریں
-                    pid = get_seq("pay_id", 1)
-                    set_seq("pay_id", pid + 1)
-                    append_csv(PAYMENTS, {
-                        "pay_id": pid,
-                        "inv_no": inv_no,
-                        "date": fmt_date(),  # آج کی تاریخ
-                        "amount": f"{diff:.2f}",
-                        "method": selected_method,  # منتخب کردہ میتھڈ
-                        "customer": "",
-                        "address": "",
-                        "note": "Manual adjustment via Payments Sheet"
-                    }, ["pay_id","inv_no","date","amount","method","customer","address","note"])
-                    # === AUTO UPDATE CUSTOMER PENDING AFTER ADJUSTMENT ===
-                    # Payments Sheet سے received تبدیل کرنے پر customer_pending بھی اپ ڈیٹ ہو جائے
-                    inv_row = next((i for i in invs if str(i.get("inv_no","")) == str(inv_no)), None)
-                    if inv_row:
-                        cust_name = to_caps(inv_row.get("name", ""))
-                        cust_addr = to_caps(inv_row.get("address", ""))
-                        if cust_name and cust_addr:
-                            # اس کسٹمر کے سارے انوائسز کا کل total
-                            customer_invoices = [i for i in invs if to_caps(i.get("name","")) == cust_name and to_caps(i.get("address","")) == cust_addr]
-                            total_due = sum(float(i.get("total","0") or 0) for i in customer_invoices)
-                            
-                            # اس کسٹمر کے سارے پیمنٹس کا کل received
-                            total_received = 0.0
-                            for p in pays:
-                                if p.get("inv_no", "") == str(inv_no):
-                                    total_received += float(p.get("amount","0") or 0)
-                            
-                            # adjustment کے بعد نیا received شامل کرو
-                            total_received += diff
-                            
-                            # نیا باقی pending
-                            new_pending = max(0.0, total_due - total_received)
-                            update_pending(cust_name, cust_addr, new_pending)
-                    # =====================================================
-                    modified += 1
-            
-            flash(f"{modified} adjustment(s) recorded with method: {selected_method}")
-            return redirect(url_for("payments"))
-        
-        # Export CSV
-        if action == "export_csv":
-            inv_no_q = request.form.get("filter_inv_no","").strip()
-            name_q = request.form.get("filter_name","").strip().lower()
-            addr_q = request.form.get("filter_address","").strip().lower()
-            date_q = request.form.get("filter_date","").strip()
-            invs = read_csv(INVOICES)
-            pays = read_csv(PAYMENTS)
-            rows = []
-            for r in invs:
-                if inv_no_q and str(r.get("inv_no","")) != inv_no_q: continue
-                if name_q and name_q not in r.get("name","").lower(): continue
-                if addr_q and addr_q not in r.get("address","").lower(): continue
-                if date_q and date_q not in r.get("date",""): continue
-                try: invn = int(r.get("inv_no"))
-                except: continue
-                total = float(r.get("total","0") or 0)
-                received = sum(float(p.get("amount","0") or 0) for p in pays if str(p.get("inv_no","")) == str(invn))
-                pending = max(total - received, 0.0)
-                rows.append({"inv_no": invn, "date": r.get("date",""), "customer": r.get("name",""), "address": r.get("address",""),
-                             "total": f"{total:.2f}", "received": f"{received:.2f}", "pending": f"{pending:.2f}"})
-            si = io.StringIO()
-            cw = csv.DictWriter(si, fieldnames=["inv_no","date","customer","address","total","received","pending"])
-            cw.writeheader()
-            cw.writerows(rows)
-            mem = io.BytesIO()
-            mem.write(si.getvalue().encode("utf-8"))
-            mem.seek(0)
-            return Response(mem.read(), mimetype="text/csv", 
-                            headers={"Content-Disposition": "attachment;filename=payments_export.csv"})
-    
-    # GET request - فلٹر اور ڈسپلے
+    con = db()
+    cur = con.cursor()
+
+    # -------- Filters --------
     inv_no_q = request.args.get("inv_no","").strip()
-    name_q = request.args.get("name","").strip().lower()
-    addr_q = request.args.get("address","").strip().lower()
-    date_q = request.args.get("date","").strip()
-    
-    invs = read_csv(INVOICES)
-    pays = read_csv(PAYMENTS)
-    # نئی انوائس (اور پیمنٹس) سب سے اوپر دکھانے کے لیے sorting
-    def sort_key(r):
-        date_str = r.get("date", "01-01-00")
-        parts = date_str.split("-")
-        if len(parts) != 3:
-            year, month, day = 2000, 1, 1
-        else:
-            day = int(parts[0] or 1)
-            month = int(parts[1] or 1)
-            year = 2000 + int(parts[2]) if len(parts[2]) == 2 else int(parts[2] or 2000)
-        inv_no = int(r.get("inv_no", 0) or 0)
-        return (year, month, day, inv_no)
+    name_q   = request.args.get("name","").strip().lower()
+    addr_q   = request.args.get("address","").strip().lower()
+    date_q   = request.args.get("date","").strip()
 
-    invs.sort(key=sort_key, reverse=True)  # نئی انوائس سب سے اوپر
+    sql = """
+    SELECT
+        i.inv_no,
+        i.date,
+        i.customer,
+        i.customer_address,
+        i.total,
+        IFNULL(SUM(p.amount),0) AS received,
+        (i.total - IFNULL(SUM(p.amount),0)) AS pending,
+        i.remarks
+    FROM invoices i
+    LEFT JOIN payments p ON p.inv_no = i.inv_no
+    WHERE 1=1
+    """
+
+    params = []
+
+    if inv_no_q:
+        sql += " AND i.inv_no = ?"
+        params.append(inv_no_q)
+
+    if name_q:
+        sql += " AND LOWER(i.customer) LIKE ?"
+        params.append(f"%{name_q}%")
+
+    if addr_q:
+        sql += " AND LOWER(i.customer_address) LIKE ?"
+        params.append(f"%{addr_q}%")
+
+    if date_q:
+        sql += " AND i.date LIKE ?"
+        params.append(f"%{date_q}%")
+
+    sql += """
+    GROUP BY i.inv_no
+    ORDER BY i.inv_no DESC
+    """
+
+    cur.execute(sql, params)
+    rows = cur.fetchall()
+    con.close()
+
     display_rows = []
-    total_received_sum = 0.0
-    total_pending_sum = 0.0
-    
-    for r in invs:
-        if inv_no_q and str(r.get("inv_no","")) != inv_no_q: continue
-        if name_q and name_q not in r.get("name","").lower(): continue
-        if addr_q and addr_q not in r.get("address","").lower(): continue
-        if date_q and date_q not in r.get("date",""): continue
-        try: invn = int(r.get("inv_no"))
-        except: continue
-        
-        # Total = اصل grand total (pending سمیت)
-        total = float(r.get("total","0") or 0)
-        received = sum(float(p.get("amount","0") or 0) for p in pays if str(p.get("inv_no","")) == str(invn))
-        pending = round(max(total - received, 0.0), 2)
+    total_received = 0.0
+    total_pending  = 0.0
 
-        total_received_sum += received
-        total_pending_sum += pending
+    for r in rows:
+        pending = round(max(r[6], 0), 2)
+        total_received += r[5]
+        total_pending  += pending
 
         display_rows.append({
-            "inv_no": invn,
-            "date": r.get("date",""),
-            "customer": r.get("name",""),
-            "address": r.get("address",""),
-            "total": f"{total:.2f}",
-            "received": f"{received:.2f}",
-            "pending": f"{pending:.2f}",
-            "remarks": r.get("remarks", "")
+            "inv_no":       r[0],
+            "date":         r[1],
+            "customer":     r[2],
+            "address":      r[3],
+            "total":        f"{r[4]:.2f}",
+            "received":     f"{r[5]:.2f}",
+            "received_raw": r[5],                    # ← added for <input value>
+            "pending":      f"{pending:.2f}",
+            "remarks":      r[7] or ""
         })
-    
+
     html = TPL_H + """
-<h3>Payments Sheet — Received & Pending</h3>
+<h3>💰 Payments / Customer Ledger</h3>
 
-<!-- Filter -->
-<form method="get" class="top">
-  <input name="inv_no" placeholder="Invoice #" value="{{request.args.get('inv_no','')}}" style="width:110px">
-  <input name="name" placeholder="Customer Name" value="{{request.args.get('name','')}}" style="width:180px">
-  <input name="address" placeholder="Address" value="{{request.args.get('address','')}}" style="width:180px">
-  <input name="date" placeholder="Date (e.g. 31-12)" value="{{request.args.get('date','')}}" style="width:140px">
-  <button class="btn">Filter</button> 
-  <a class="link" href="{{url_for('payments')}}">Clear Filter</a>
-</form>
-
-<p style="font-size:18px; margin:15px 0;">
-  <strong>Total Received:</strong> Rs {{'%.2f'|format(total_received_sum)}} | 
-  <strong>Total Pending:</strong> <span style="color:#d32f2f;">Rs {{'%.2f'|format(total_pending_sum)}}</span>
-</p>
-
-<!-- Bulk Edit Form -->
-<form method="post" onsubmit="return confirm('Save all changes? This will record adjustments with selected method.')">
-  <input type="hidden" name="action" value="bulk_set">
-  
-  <div style="margin-bottom:15px;">
-    <label><strong>Adjustment Method:</strong></label>
-    <select name="payment_method" style="padding:10px; font-size:16px; margin-left:10px;">
-      <option value="Cash">Cash</option>
-      <option value="Bank Transfer">Bank Transfer</option>
-      <option value="JazzCash">JazzCash</option>
-      <option value="EasyPaisa">EasyPaisa</option>
-      <option value="Cheque">Cheque</option>
-      <option value="Online">Online</option>
-      <option value="Adjustment">Adjustment Only</option>
-    </select>
-  </div>
-
-  <table style="width:100%; border-collapse:collapse;">
-    <thead style="background:#1976d2; color:white;">
-      <tr>
-        <th style="padding:12px;">Invoice</th>
-        <th style="padding:12px;">Date</th>
-        <th style="padding:12px;">Customer</th>
-        <th style="padding:12px;">Address</th>
-        <th style="padding:12px; text-align:right;">Total</th>
-        <th style="padding:12px; text-align:center;">Received (Edit)</th>
-        <th style="padding:12px; text-align:right; color:#d32f2f;">Pending</th>
-        <th style="padding:12px; width:250px;">Manual Remark / Note</th>
-      </tr>
-    </thead>
-    <tbody>
-    {% for r in display_rows %}
-      <tr {% if r.pending != '0.00' %}style="background:#fff3e0;"{% endif %}>
-        <td style="padding:12px;">{{r.inv_no}}</td>
-        <td style="padding:12px;">{{r.date}}</td>
-        <td style="padding:12px;"><strong>{{r.customer}}</strong></td>
-        <td style="padding:12px;">{{r.address}}</td>
-        <td style="padding:12px; text-align:right;">Rs {{r.total}}</td>
-        <td style="padding:12px; text-align:center;">
-          <input name="set_received_{{r.inv_no}}" value="{{r.received}}" 
-                 style="width:120px; padding:8px; text-align:right; font-weight:bold;" 
-                 type="number" step="0.01">
-        </td>
-        <td style="padding:12px; text-align:right; font-size:18px; font-weight:bold;">Rs {{r.pending}}</td>
-        <td style="padding:12px;">
-  <input name="remark_{{r.inv_no}}" value="{{ r.remarks or '' }}" 
-         placeholder="Type note..." 
-         style="width:100%; padding:10px; border:1px solid #ccc; border-radius:6px; font-size:14px;">
-</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-
-  <div style="margin-top:20px; text-align:center;">
-    <button class="btn" style="background:#2e7d32; padding:14px 40px; font-size:18px;">Save All Changes</button>
-    <button class="btn" name="action" value="export_csv" formaction="{{url_for('payments')}}" formmethod="post"
-            style="background:#1565c0; margin-left:20px;">Export to CSV</button>
-    <a class="link" href="{{url_for('home')}}" style="margin-left:30px;">← Back to Home</a>
-  </div>
-</form>
-
-<p class="small" style="margin-top:30px; color:#666;">
-  نوٹ: Received میں تبدیلی کرنے پر خود بخود Adjustment Payment ریکارڈ ہو جائے گا (date: آج کی، method: منتخب کردہ)
-</p>
-""" + TPL_F
-
-    return render_template_string(html,
-                                  display_rows=display_rows,
-                                  total_received_sum=total_received_sum,
-                                  total_pending_sum=total_pending_sum,
-                                  request=request,
-                                  project=get_setting("project_name"))
-# ================================================
-# ---------- Invoices List (with monthly sub-cards) ----------
-# ---------- invoices list (shortened) ----------
-@app.route("/invoices", methods=["GET","POST"])
-@login_required
-def invoices_list():
-    if request.method == "POST":
-        act = request.form.get("action","")
-        if act == "delete":
-            inv_del = request.form.get("inv_no_del","")
-            if inv_del:
-                del_inv = str(inv_del)
-                all_lines = read_csv(LINES); prod_rows = read_csv(PRODUCTS)
-                for l in all_lines:
-                    if str(l.get("inv_no")) == del_inv:
-                        pname = l.get("product")
-                        try: qty = float(l.get("qty","0") or 0)
-                        except: qty = 0.0
-                        for pr in prod_rows:
-                            if pr["name"] == pname:
-                                try: pr["stock"] = f"{float(pr.get('stock','0') or 0) + qty:.2f}"
-                                except: pr["stock"] = f"{qty:.2f}"
-                write_csv(PRODUCTS, prod_rows, ["name","unit_price","purchase_price","stock","min_stock"])
-                invs = read_csv(INVOICES)
-                invs2 = [r for r in invs if str(r.get("inv_no")) != del_inv]
-                write_csv(INVOICES, invs2, ["inv_no","date","name","address","phone","tax","total","logo_path","pending_added","remarks"])
-                lines2 = [l for l in all_lines if str(l.get("inv_no")) != del_inv]
-                write_csv(LINES, lines2, ["inv_no","product","qty","unit_price"])
-                base = output_base() / "BusinessRecords"
-                for p in base.rglob(f"INV_{del_inv}.pdf"):
-                    try: p.unlink()
-                    except: pass
-                flash(f"Deleted invoice {del_inv} and restored stock")
-                return redirect(url_for("invoices_list"))
-        if act == "edit":
-            inv_no = request.form.get("inv_no_edit")
-            new_name = to_caps(request.form.get("name_edit",""))
-            new_addr = to_caps(request.form.get("address_edit",""))
-            rows = read_csv(INVOICES); changed=False
-            for r in rows:
-                if str(r.get("inv_no")) == str(inv_no):
-                    if new_name: r["name"] = new_name
-                    if new_addr: r["address"] = new_addr
-                    changed=True
-            if changed:
-                write_csv(INVOICES, rows, ["inv_no","date","name","address","phone","tax","total","logo_path"])
-                flash("Updated invoice")
-            return redirect(url_for("invoices_list"))
-    inv_no_q = request.args.get("inv_no","").strip()
-    name_q = request.args.get("name","").strip()
-    addr_q = request.args.get("address","").strip()
-    rows = read_csv(INVOICES)
-    # نئی انوائس سب سے اوپر دکھانے کے لیے sorting
-    def invoice_sort_key(r):
-        date_str = r.get("date", "01-01-00")
-        parts = date_str.split("-")
-        if len(parts) != 3:
-            year, month, day = 2000, 1, 1
-        else:
-            day = int(parts[0])
-            month = int(parts[1])
-            year = 2000 + int(parts[2]) if len(parts[2]) == 2 else int(parts[2])
-        inv_no = int(r.get("inv_no", 0) or 0)
-        return (year, month, day, inv_no)
-
-    rows.sort(key=invoice_sort_key, reverse=True)  # نئی سب سے اوپر
-    if inv_no_q: rows = [r for r in rows if str(r.get("inv_no","")) == inv_no_q]
-    if name_q: rows = [r for r in rows if name_q.lower() in r.get("name","").lower()]
-    if addr_q: rows = [r for r in rows if addr_q.lower() in r.get("address","").lower()]
-    total_sales = sum(float(r.get("total","0") or 0) for r in read_csv(INVOICES))
-    html = TPL_H + """
-<h3>All Invoices</h3>
-</div>
 <form method="get" class="top">
   <input name="inv_no" placeholder="Invoice #" value="{{request.args.get('inv_no','')}}">
-  <input name="name" placeholder="Customer name" value="{{request.args.get('name','')}}">
+  <input name="name" placeholder="Customer" value="{{request.args.get('name','')}}">
   <input name="address" placeholder="Address" value="{{request.args.get('address','')}}">
-  <button class="btn">Filter</button> <a class="link" href="{{url_for('invoices_list')}}">Clear</a>
+  <input name="date" placeholder="Date" value="{{request.args.get('date','')}}">
+  <button class="btn">Filter</button>
+  <a class="link" href="{{url_for('payments')}}">Clear</a>
 </form>
-<p class="small">Total invoices: {{rows|length}} | Total Sales: Rs {{'%.2f'|format(total_sales)}}</p>
-<table>
-<tr><th>Inv#</th><th>Date</th><th>Customer</th><th>Address</th><th>Total</th><th>PDF</th><th>Actions</th></tr>
-{% for r in rows %}
-<tr>
-  <td>{{r.inv_no}}</td><td>{{r.date}}</td><td>{{r.name}}</td><td>{{r.address}}</td><td>{{r.total}}</td>
-<td>
-  <!-- View PDF button -->
-  <a class="link" target="_blank" href="{{ url_for('find_view_pdf', inv=r.inv_no) }}">View</a
-<a class="btn" target="_blank"
-   href="{{ url_for('share_pdf', inv=r.inv_no) }}"
-   style="background:#25d366;padding:6px 12px;font-size:13px;margin-left:5px;">
-</a>
 
-  <!-- Direct download button -->
-  <!-- <a class="btn" target="_blank" 
-     href="{{ url_for('share_pdf', inv=r.inv_no) }}" 
-     style="background:#4caf50;padding:6px 12px;font-size:13px;margin-left:5px;">
-     Download
-  </a> -->
+<p style="font-size:18px;margin:15px 0;">
+  <strong>Total Received:</strong> Rs {{'%.2f'|format(total_received)}} |
+  <strong>Total Pending:</strong>
+  <span style="color:#c62828;">Rs {{'%.2f'|format(total_pending)}}</span>
+</p>
+
+<div style="overflow-x:auto;">
+<table>
+<thead style="background:#1976d2;color:white;">
+<tr>
+  <th>Inv#</th>
+  <th>Date</th>
+  <th>Customer</th>
+  <th>Address</th>
+  <th>Total</th>
+  <th>Received</th>
+  <th>Pending</th>
+  <th>Remarks</th>
+  <th></th>  <!-- new small column for save button -->
+</tr>
+</thead>
+<tbody>
+{% for r in rows %}
+<tr {% if r.pending != '0.00' %}style="background:#fff3e0;"{% endif %}>
+  <td>{{r.inv_no}}</td>
+  <td>{{r.date}}</td>
+  <td><strong>{{r.customer}}</strong></td>
+  <td>{{r.address}}</td>
+  <td>Rs {{r.total}}</td>
+
   <td>
-    <form style="display:inline" method="post">
-      <input type="hidden" name="action" value="delete"><input name="inv_no_del" value="{{r.inv_no}}" hidden>
-      <button class="btn" onclick="return confirm('Delete invoice {{r.inv_no}}?')">Delete</button>
+    <form method="post" action="{{ url_for('payments_update') }}" style="margin:0;">
+      <input type="hidden" name="inv_no" value="{{ r.inv_no }}">
+      <input type="number" step="0.01" name="received" value="{{ r.received_raw }}" 
+             style="width:110px; text-align:right; border:1px solid #ccc; padding:3px;">
+  </td>
+
+  <td style="font-weight:bold;color:#c62828;">Rs {{r.pending}}</td>
+
+  <td>
+    <input type="text" name="remarks" value="{{ r.remarks }}" 
+           style="width:200px; border:1px solid #ccc; padding:3px;" placeholder="...">
+  </td>
+
+  <td style="padding:4px; text-align:center;">
+    <button type="submit" class="btn" style="padding:4px 10px; font-size:13px;">Save</button>
     </form>
-    <!-- <a class="btn" href="{{ url_for('edit_invoice', inv_no=r.inv_no) }}" 
-   style="background:#1976d2;padding:6px 12px;font-size:13px;margin-left:5px;">
-   Full Edit -->
-</a>
   </td>
 </tr>
 {% endfor %}
+</tbody>
 </table>
+</div>
 
-<div id="editbox" style="display:none;margin-top:12px" class="card">
+<div style="margin-top:25px;text-align:center;">
+  <a class="btn" href="{{url_for('home')}}">← Back</a>
+</div>
+""" + TPL_F
+
+    return render_template_string(
+        html,
+        rows=display_rows,
+        total_received=total_received,
+        total_pending=total_pending,
+        request=request,
+        project=get_setting("project_name")
+    )
+
+
+# ── Add this new route anywhere in your app (preferably after the payments route) ──
+@app.route("/payments/update", methods=["POST"])
+@login_required
+def payments_update():
+    inv_no   = request.form.get("inv_no")
+    received = request.form.get("received", "").strip()
+    remarks  = request.form.get("remarks", "").strip()
+
+    if not inv_no:
+        return "Missing invoice number", 400
+
+    con = db()
+    cur = con.cursor()
+
+    try:
+        con.execute("BEGIN")
+
+        # Update / insert received amount
+        if received:
+            try:
+                amount = float(received)
+                if amount < 0:
+                    raise ValueError("Amount cannot be negative")
+
+                cur.execute("SELECT 1 FROM payments WHERE inv_no = ?", (inv_no,))
+                if cur.fetchone():
+                    cur.execute("UPDATE payments SET amount = ? WHERE inv_no = ?", (amount, inv_no))
+                else:
+                    cur.execute("INSERT INTO payments (inv_no, amount) VALUES (?, ?)", (inv_no, amount))
+            except ValueError:
+                con.rollback()
+                return "Invalid amount format", 400
+
+        # Update remarks (even if empty)
+        cur.execute("UPDATE invoices SET remarks = ? WHERE inv_no = ?", (remarks, inv_no))
+
+        con.commit()
+        return redirect(url_for("payments", **request.args.to_dict(flat=False)))
+
+    except Exception as e:
+        con.rollback()
+        return f"Database error: {str(e)}", 500
+
+    finally:
+        con.close()
+
+# ================================================
+# ---------- Invoices List (with monthly sub-cards) ----------
+# ---------- INVOICES (SQLITE | FOLDABLE | FILTER | BUTTONS) ----------
+@app.route("/invoices", methods=["GET","POST"])
+@login_required
+def invoices_list():
+
+    # ---------- POST : DELETE / EDIT ----------
+    if request.method == "POST":
+        act = request.form.get("action","")
+        con = db()
+        cur = con.cursor()
+
+        # ----- DELETE INVOICE -----
+        if act == "delete":
+            inv_no = request.form.get("inv_no_del")
+
+            # restore stock
+            cur.execute("""
+                SELECT product, qty FROM invoice_items WHERE inv_no=?
+            """, (inv_no,))
+            for p, q in cur.fetchall():
+                cur.execute("""
+                    UPDATE products SET stock = stock + ? WHERE name=?
+                """, (q, p))
+
+            # delete invoice + items
+            cur.execute("DELETE FROM invoice_items WHERE inv_no=?", (inv_no,))
+            cur.execute("DELETE FROM invoices WHERE inv_no=?", (inv_no,))
+            con.commit()
+            con.close()
+
+            # delete pdf
+            base = output_base() / "BusinessRecords"
+            for p in base.rglob(f"INV_{inv_no}*.pdf"):
+                try: p.unlink()
+                except: pass
+
+            flash(f"Deleted invoice {inv_no}")
+            return redirect(url_for("invoices_list"))
+
+        # ----- EDIT CUSTOMER -----
+        if act == "edit":
+            inv_no = request.form.get("inv_no_edit")
+            name = to_caps(request.form.get("name_edit",""))
+            addr = to_caps(request.form.get("address_edit",""))
+
+            cur.execute("""
+                UPDATE invoices
+                SET customer=?, customer_address=?
+                WHERE inv_no=?
+            """, (name, addr, inv_no))
+
+            con.commit()
+            con.close()
+            flash("Invoice updated")
+            return redirect(url_for("invoices_list"))
+
+    # ---------- FILTERS ----------
+    q = request.args.get("q","").strip().lower()
+
+    con = db()
+    cur = con.cursor()
+
+    # ---------- MONTH GROUP ----------
+    cur.execute("""
+        SELECT substr(date,1,7) ym,
+               COUNT(*),
+               SUM(total)
+        FROM invoices
+        GROUP BY ym
+        ORDER BY ym DESC
+    """)
+    months = cur.fetchall()
+
+    data = []
+    for ym, cnt, total in months:
+        sql = """
+            SELECT inv_no, date, customer, customer_address, total
+            FROM invoices
+            WHERE substr(date,1,7)=?
+        """
+        params = [ym]
+
+        if q:
+            sql += " AND (inv_no LIKE ? OR customer LIKE ? OR customer_address LIKE ?)"
+            params += [f"%{q}%", f"%{q}%", f"%{q}%"]
+
+        sql += " ORDER BY date DESC, inv_no DESC"
+        cur.execute(sql, params)
+
+        data.append({
+            "month": ym,
+            "count": cnt,
+            "total": total or 0,
+            "rows": cur.fetchall()
+        })
+
+    con.close()
+
+    # ---------- UI ----------
+    html = TPL_H + """
+<h3>Invoices</h3>
+
+<button class="btn" onclick="history.back()">⬅ Back</button>
+<a class="btn" href="/reports/salesman-month">
+  Salesman Month Report
+</a>
+
+<a class="btn" href="{{ url_for('report_salesman_month') }}">
+  📊 Salesman Month
+</a>
+
+
+<form method="get" class="top" style="margin-top:15px;">
+  <input name="q" placeholder="Search invoice / customer / address"
+         value="{{request.args.get('q','')}}" style="width:320px;">
+  <button class="btn">Search</button>
+  <a class="link" href="{{url_for('invoices_list')}}">Clear</a>
+</form>
+
+{% for m in data %}
+<details open style="margin-top:25px;">
+  <summary style="font-size:18px;font-weight:bold;cursor:pointer">
+    📁 {{m.month}}
+    | Invoices: {{m.count}}
+    | Total: Rs {{'%.2f'|format(m.total)}}
+  </summary>
+
+  <div style="overflow-x:auto">
+  <table>
+    <tr>
+      <th>Inv#</th><th>Date</th><th>Name</th><th>Address</th>
+      <th>Total</th><th>Actions</th>
+    </tr>
+
+    {% for r in m.rows %}
+    <tr>
+      <td>{{r[0]}}</td>
+      <td>{{r[1]}}</td>
+      <td>{{r[2]}}</td>
+      <td>{{r[3]}}</td>
+      <td>{{r[4]}}</td>
+      <td>
+        <a class="btn" target="_blank"
+           href="{{ url_for('find_view_pdf', inv=r[0]) }}">View</a>
+
+        <a class="btn" target="_blank"
+           href="{{ url_for('find_view_pdf', inv=r[0]) }}"
+           style="background:#4caf50;">Download</a>
+
+        <a class="btn" target="_blank"
+           href="{{ url_for('share_pdf', inv=r[0]) }}"
+           style="background:#25d366;">WhatsApp</a>
+
+        <a class="btn"
+           onclick="showEdit('{{r[0]}}','{{r[2]}}','{{r[3]}}')"
+           style="background:#1976d2;">Edit</a>
+
+        <form method="post" style="display:inline">
+          <input type="hidden" name="action" value="delete">
+          <input type="hidden" name="inv_no_del" value="{{r[0]}}">
+          <button class="btn" style="background:#c62828"
+            onclick="return confirm('Delete invoice {{r[0]}}?')">
+            Delete
+          </button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+</details>
+{% endfor %}
+
+<div id="editbox" style="display:none;margin-top:15px" class="card">
   <h4>Edit Invoice</h4>
   <form method="post">
     <input type="hidden" name="action" value="edit">
     <input name="inv_no_edit" id="inv_no_edit" hidden>
     <input name="name_edit" id="name_edit" placeholder="Customer name">
     <input name="address_edit" id="address_edit" placeholder="Address">
-    <button class="btn">Save</button> <button type="button" onclick="document.getElementById('editbox').style.display='none'">Cancel</button>
+    <button class="btn">Save</button>
+    <button type="button" class="btn"
+      onclick="document.getElementById('editbox').style.display='none'">
+      Cancel
+    </button>
   </form>
 </div>
 
@@ -2338,46 +2468,34 @@ function showEdit(inv,name,addr){
 }
 </script>
 """ + TPL_F
-    return render_template_string(html, rows=rows, total_sales=total_sales, request=request, project=get_setting("project_name"))
 
+    return render_template_string(
+        html,
+        data=data,
+        request=request,
+        project=get_setting("project_name")
+    )
+
+
+# ---------- SHARE PDF (SQLITE) ----------
+@app.route("/share_pdf")
 @app.route("/share_pdf/<inv>")
 @login_required
-def share_pdf(inv):
-    # 1. Locate local PDF
-    pdf_path = None
-    for r in read_csv(INVOICES):
-        if str(r.get("inv_no")) == str(inv):
-            name_safe = safe_name(to_caps(r.get("name","")))
-            addr_safe = safe_name(to_caps(r.get("address","")))
-            fn = f"INV_{r['inv_no']}_{name_safe}_{addr_safe}.pdf"
-            base = output_base() / "BusinessRecords"
-            for p in base.rglob(fn):
-                pdf_path = p
-                break
-            break
+def share_pdf(inv=None):
 
-    if not pdf_path or not pdf_path.exists():
-        flash("PDF not found")
+    # ----- safety: inv missing -----
+    if not inv:
+        flash("Invoice number missing for WhatsApp")
         return redirect(url_for("invoices_list"))
 
-    # 2. Upload to cloud
-    link = upload_to_gdrive(str(pdf_path))  # Google Drive
-    # link = upload_to_s3(str(pdf_path), "bucket_name")  # AWS S3 optional
+    # ----- build public link (no gdrive dependency) -----
+    link = url_for("find_view_pdf", inv=inv, _external=True)
 
-    # 3. Show share box
-    html = f"""
-    <h3>Share Invoice {inv}</h3>
-    <p>Share this link via WhatsApp, Email, or copy:</p>
-    <input type="text" value="{link}" id="share_link" readonly style="width:80%;">
-    <button onclick="navigator.clipboard.writeText(document.getElementById('share_link').value)">
-        Copy Link
-    </button>
-    <a href="https://wa.me/?text=Invoice%20{inv}%20link:%20{link}" target="_blank" 
-       style="background:#25d366;padding:6px 12px;font-size:13px;margin-left:5px;">
-       WhatsApp
-    </a>
-    """
-    return html
+    # ----- redirect to WhatsApp -----
+    return redirect(
+        f"https://wa.me/?text=Invoice%20{inv}%20{link}"
+    )
+
 
 # ---------- Edit Invoice (new route) ----------
 @app.route("/invoice/edit/<int:inv_no>", methods=["GET", "POST"])
@@ -2608,157 +2726,690 @@ function addRow() {
         project=get_setting("project_name")
     )
 # ---------- find_view_pdf ----------
+@app.route("/find_view_pdf")
 @app.route("/find_view_pdf/<inv>")
 @login_required
-def find_view_pdf(inv):
-    for r in read_csv(INVOICES):
-        if str(r.get("inv_no")) == str(inv):
-            d = r.get("date","")
-            try:
-                if "-" in d and len(d.split("-")[2])==2:
-                    dt = datetime.datetime.strptime(d,"%d-%m-%y")
-                elif "-" in d and len(d.split("-")[2])==4:
-                    dt = datetime.datetime.strptime(d,"%d-%m-%Y")
-                else:
-                    dt = datetime.datetime.strptime(d,"%Y-%m-%d")
-            except:
-                dt = datetime.datetime.now()
-            name_safe = safe_name(to_caps(r.get("name","")))
-            addr_safe = safe_name(to_caps(r.get("address","")))
-            fn = f"INV_{r['inv_no']}_{name_safe}_{addr_safe}.pdf"
-            return redirect(url_for("view_pdf", y=dt.year, m=dt.strftime("%B"), fn=fn))
-    flash("Invoice not found")
-    return redirect(url_for("reports"))
+def find_view_pdf(inv=None):
+
+    # ---------- Safety check ----------
+    if not inv:
+        flash("Invoice number missing")
+        return redirect(url_for("invoices_list"))
+
+    # ---------- Fetch invoice from SQLITE ----------
+    con = db()
+    cur = con.cursor()
+    cur.execute("""
+        SELECT inv_no, date, customer, customer_address
+        FROM invoices
+        WHERE inv_no = ?
+    """, (inv,))
+    row = cur.fetchone()
+    con.close()
+
+    if not row:
+        flash("Invoice not found")
+        return redirect(url_for("invoices_list"))
+
+    inv_no, d, customer, address = row
+
+    # ---------- Date parsing (safe) ----------
+    try:
+        if "-" in d and len(d.split("-")[2]) == 2:
+            dt = datetime.datetime.strptime(d, "%d-%m-%y")
+        elif "-" in d and len(d.split("-")[2]) == 4:
+            dt = datetime.datetime.strptime(d, "%d-%m-%Y")
+        else:
+            dt = datetime.datetime.strptime(d, "%Y-%m-%d")
+    except:
+        dt = datetime.datetime.now()
+
+    # ---------- Safe filename ----------
+    name_safe = safe_name(to_caps(customer))
+    addr_safe = safe_name(to_caps(address))
+    fn = f"INV_{inv_no}_{name_safe}_{addr_safe}.pdf"
+
+    # ---------- Redirect to PDF viewer ----------
+    return redirect(
+        url_for(
+            "view_pdf",
+            y=dt.year,
+            m=dt.strftime("%B"),
+            fn=fn
+        )
+    )
+
 
 # ---------- reports ----------
-@app.route("/reports", methods=["GET","POST"])
+@app.route("/reports", methods=["GET", "POST"])
 @login_required
 def reports():
-    if request.method == "POST":
-        action = request.form.get("action")
-        if action == "build":
-            now = datetime.datetime.now()
-            out_dir = ensure_out_dirs(now.year, now.strftime("%B"))
-            pdf_path = build_month_summary_pdf(now.year, now.strftime("%B"), out_dir)
-            flash(f"Monthly summary PDF created: {pdf_path}")
-            return redirect(url_for("reports"))
-        if action == "delete_summary":
-            fn = request.form.get("fn")
-            if fn:
-                p = Path(fn)
-                try:
-                    p.unlink()
-                    flash(f"Deleted {p.name}")
-                except Exception as e:
-                    flash(f"Could not delete: {e}")
-            return redirect(url_for("reports"))
-        if action == "delete_invoice":
-            inv_del = request.form.get("inv_no_del","").strip()
-            if inv_del:
-                all_lines = read_csv(LINES); prod_rows = read_csv(PRODUCTS)
-                for l in all_lines:
-                    if str(l.get("inv_no")) == str(inv_del):
-                        pname = l.get("product")
-                        try: qty = float(l.get("qty","0") or 0)
-                        except: qty = 0.0
-                        for pr in prod_rows:
-                            if pr["name"] == pname:
-                                pr["stock"] = f"{float(pr.get('stock','0') or 0) + qty:.2f}"
-                write_csv(PRODUCTS, prod_rows, ["name","unit_price","purchase_price","stock","min_stock"])
-                invs = read_csv(INVOICES)
-                invs2 = [r for r in invs if str(r.get("inv_no")) != str(inv_del)]
-                write_csv(INVOICES, invs2, ["inv_no","date","name","address","phone","tax","total","logo_path"])
-                lines2 = [l for l in all_lines if str(l.get("inv_no")) != str(inv_del)]
-                write_csv(LINES, lines2, ["inv_no","product","qty","unit_price"])
-                base = output_base() / "BusinessRecords"
-                if base.exists():
-                    for p in base.rglob(f"INV_{inv_del}_*.pdf"):
-                        try: p.unlink()
-                        except: pass
-                flash(f"Deleted invoice {inv_del} and restored stock")
-            return redirect(url_for("reports"))
-    inv_no_q = request.args.get("inv_no","").strip(); name_q = request.args.get("name","").strip(); addr_q = request.args.get("address","").strip()
-    rows = read_csv(INVOICES)
-    if inv_no_q: rows = [r for r in rows if str(r.get("inv_no","")) == inv_no_q]
-    if name_q: rows = [r for r in rows if name_q.lower() in r.get("name","").lower()]
-    if addr_q: rows = [r for r in rows if addr_q.lower() in r.get("address","").lower()]
-    agg = {}
-    for r in read_csv(INVOICES):
-        d = r.get("date","")
-        try:
-            if "-" in d and len(d.split("-")[2]) == 2:
-                dt = datetime.datetime.strptime(d, "%d-%m-%y")
-            elif "-" in d and len(d.split("-")[2]) == 4:
-                dt = datetime.datetime.strptime(d, "%d-%m-%Y")
-            else:
-                dt = datetime.datetime.strptime(d, "%Y-%m-%d")
-        except:
-            continue
-        key = dt.strftime("%Y-%m"); agg.setdefault(key, 0.0); agg[key] += float(r.get("total","0") or 0)
-    labels = sorted(agg.keys()); data = [round(agg[k], 2) for k in labels]
-    total_sales = sum(float(r.get("total","0") or 0) for r in read_csv(INVOICES))
-    base = output_base() / "BusinessRecords"
-    summary_files = []
-    if base.exists():
-        for ydir in sorted([p for p in base.iterdir() if p.is_dir()], reverse=True):
-            for mdir in sorted([p for p in ydir.iterdir() if p.is_dir()], reverse=True):
-                for fn in mdir.glob("SUMMARY_*.pdf"):
-                    summary_files.append({"path": str(fn), "year": ydir.name, "month": mdir.name, "fn": fn.name})
+    today = datetime.date.today()
+    today_str = today.isoformat()
+    current_month = today.strftime("%B %Y")
+
+    con = sqlite3.connect(DB_FILE)
+    cur = con.cursor()
+
+    # 1. آج کی سیلز
+    cur.execute("""
+        SELECT COALESCE(SUM(total), 0) AS today_sales
+        FROM invoices
+        WHERE date = ?
+    """, (today_str,))
+    today_sales = cur.fetchone()[0] or 0.0
+
+    # 2. آج کے اخراجات
+    cur.execute("""
+        SELECT COALESCE(SUM(amount), 0) AS today_expenses
+        FROM expenses
+        WHERE date = ?
+    """, (today_str,))
+    today_expenses = cur.fetchone()[0] or 0.0
+
+    # 3. ٹاپ 10 سیلنگ پروڈکٹس (تمام وقت یا موجودہ مہینہ - آپ منتخب کر سکتے ہیں)
+    cur.execute("""
+        SELECT p.name, SUM(ii.qty) as total_qty, SUM(ii.qty * ii.price) as total_amount
+        FROM invoice_items ii
+        JOIN products p ON p.name = ii.product
+        JOIN invoices i ON i.inv_no = ii.inv_no
+        WHERE i.date LIKE ? || '%'
+        GROUP BY p.name
+        ORDER BY total_amount DESC
+        LIMIT 10
+    """, (today.strftime("%Y-%m"),))
+    top_products = cur.fetchall()
+
+    # 4. ٹاپ 10 کسٹمرز (تمام وقت یا موجودہ مہینہ)
+    cur.execute("""
+        SELECT customer, customer_address, SUM(total) as total_spent
+        FROM invoices
+        WHERE date LIKE ? || '%'
+        GROUP BY customer, customer_address
+        ORDER BY total_spent DESC
+        LIMIT 10
+    """, (today.strftime("%Y-%m"),))
+    top_customers = cur.fetchall()
+
+    con.close()
+
+    # PDF سمری والا حصہ (اگر رکھنا چاہتے ہیں تو رکھیں، ورنہ ہٹا دیں)
+    base_dir = output_base() / "BusinessRecords" / str(today.year) / current_month.split()[0]
+    base_dir.mkdir(parents=True, exist_ok=True)
+    pdf_filename = f"SUMMARY_{today.year}_{current_month.split()[0]}.pdf"
+    pdf_exists = (base_dir / pdf_filename).exists()
+
     html = TPL_H + """
-<h3>Reports</h3>
-<form method="post" class="top">
-  <div><span class="small">Build monthly summary PDF</span></div>
-  <button class="btn" name="action" value="build">Build Monthly PDF</button>
-</form>
+<style>
+  .accordion {
+    background: #f8f9fa;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    overflow: hidden;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+  }
+  .accordion summary {
+    padding: 16px;
+    font-size: 18px;
+    font-weight: 600;
+    background: #1976d2;
+    color: white;
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .accordion summary::after {
+    content: '▼';
+    transition: transform 0.3s;
+  }
+  .accordion[open] summary::after {
+    transform: rotate(180deg);
+  }
+  .accordion .content {
+    padding: 16px;
+    background: white;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  th, td {
+    padding: 10px;
+    text-align: left;
+    border-bottom: 1px solid #eee;
+  }
+  th {
+    background: #f0f0f0;
+  }
+  @media (max-width: 600px) {
+    .accordion summary { font-size: 16px; padding: 14px; }
+    th, td { font-size: 14px; padding: 8px; }
+  }
+</style>
 
-<form method="get" class="top">
-  <input name="inv_no" placeholder="Invoice #" value="{{request.args.get('inv_no','')}}" style="width:120px">
-  <input name="name" placeholder="Customer name" value="{{request.args.get('name','')}}" style="width:220px">
-  <input name="address" placeholder="Address" value="{{request.args.get('address','')}}" style="width:220px">
-  <button class="btn">Filter</button> <a class="link" href="{{url_for('reports')}}">Clear</a>
-</form>
+<h2>📊 Reports Dashbord </h2>
 
-<p class="small">Showing: {{rows|length}} invoices | Total Sales: Rs {{'%.2f'|format(total_sales)}}</p>
+<a href="{{ url_for('home') }}" class="btn" style="margin-bottom:20px;">← Back</a>
 
-<table>
-<tr><th>Inv#</th><th>Date</th><th>Customer</th><th>Address</th><th>Total</th><th>PDF</th><th>Actions</th></tr>
-{% for r in rows %}
-<tr>
-  <td>{{r.inv_no}}</td><td>{{r.date}}</td><td>{{r.name}}</td><td>{{r.address}}</td><td>{{r.total}}</td>
-  <td><a class="link" target="_blank" href="{{ url_for('find_view_pdf', inv=r.inv_no) }}">View</a></td>
-  <td>
-    <form method="post" style="display:inline" onsubmit="return confirm('Delete invoice {{r.inv_no}}? This will restore stock and remove PDFs.')">
-      <input type="hidden" name="action" value="delete_invoice">
-      <input type="hidden" name="inv_no_del" value="{{r.inv_no}}">
-      <button class="btn">Delete</button>
-    </form>
-  </td>
-</tr>
-{% endfor %}
-</table>
+<!-- آج کا خلاصہ -->
+<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap:16px; margin-bottom:24px;">
+  <div class="card" style="background:#e3f2fd; border-left:5px solid #1976d2;">
+    <h4>Today Sale</h4>
+    <p style="font-size:28px; font-weight:bold; color:#1565c0;">
+      Rs {{ "%.2f"|format(today_sales) }}
+    </p>
+  </div>
+  <div class="card" style="background:#ffebee; border-left:5px solid #c62828;">
+    <h4>Today Expence </h4>
+    <p style="font-size:28px; font-weight:bold; color:#c62828;">
+      Rs {{ "%.2f"|format(today_expenses) }}
+    </p>
+  </div>
+  <div class="card" style="background:#e8f5e9; border-left:5px solid #2e7d32;">
+    <h4>Today Profit </h4>
+    <p style="font-size:28px; font-weight:bold; color:#2e7d32;">
+      Rs {{ "%.2f"|format(today_sales - today_expenses) }}
+    </p>
+  </div>
+</div>
 
-<h4 style="margin-top:12px">Summary PDFs</h4>
-{% if summary_files %}
-<table>
-<tr><th>Year</th><th>Month</th><th>File</th><th>Action</th></tr>
-{% for s in summary_files %}
-<tr>
-<td>{{s.year}}</td><td>{{s.month}}</td><td><a class="link" target="_blank" href="{{ url_for('open_summary', year=s.year, month=s.month, fn=s.fn) }}">{{s.fn}}</a></td>
-<td>
-  <form method="post" style="display:inline">
-    <input type="hidden" name="action" value="delete_summary">
-    <input type="hidden" name="fn" value="{{s.path}}">
-    <button class="btn" onclick="return confirm('Delete summary {{s.fn}}?')">Delete</button>
+<!-- فولڈ ایبل سیکشنز -->
+<details class="accordion">
+  <summary>Top 10 Salling Product(Current Month)</summary>
+  <div class="content">
+    {% if top_products %}
+    <table>
+      <tr><th>Product</th><th>Total qty</th><th>Total Amount</th></tr>
+      {% for p in top_products %}
+      <tr>
+        <td>{{ p[0] }}</td>
+        <td style="text-align:center;">{{ "%.2f"|format(p[1]) }}</td>
+        <td style="text-align:right; font-weight:bold;">Rs {{ "%.2f"|format(p[2]) }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p style="color:#777;">There have been no sales so far this month.</p>
+    {% endif %}
+  </div>
+</details>
+
+<details class="accordion">
+  <summary>Top 10 Customers (Current Month)</summary>
+  <div class="content">
+    {% if top_customers %}
+    <table>
+      <tr><th>Customers</th><th>Adress</th><th>Total Expence</th></tr>
+      {% for c in top_customers %}
+      <tr>
+        <td>{{ c[0] }}</td>
+        <td>{{ c[1] }}</td>
+        <td style="text-align:right; font-weight:bold;">Rs {{ "%.2f"|format(c[2]) }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p style="color:#777;">No customers have visited so far this month.</p>
+    {% endif %}
+  </div>
+</details>
+
+<!-- اگر آپ چاہتے ہیں کہ PDF جنریشن کا بٹن بھی رہے تو یہاں شامل کریں -->
+<div style="margin-top:30px; text-align:center;">
+  <form method="post">
+    <button type="submit" name="action" value="build" class="btn" 
+            style="background:#ff9800; padding:12px 40px; font-size:17px;">
+      Current Month Summary PDF
+    </button>
   </form>
-</td>
-</tr>
+</div>
+
+<script>
+  // فولڈ ایبل کو ایک وقت میں صرف ایک کھلا رکھنے کا آپشن (اختیاری)
+  document.querySelectorAll('details.accordion').forEach(d => {
+    d.addEventListener('toggle', function() {
+      if (this.open) {
+        document.querySelectorAll('details.accordion').forEach(other => {
+          if (other !== this) other.open = false;
+        });
+      }
+    });
+  });
+</script>
+""" + TPL_F
+
+    return render_template_string(
+        html,
+        today_sales=today_sales,
+        today_expenses=today_expenses,
+        top_products=top_products,
+        top_customers=top_customers,
+        project=get_setting("project_name")
+    )
+
+@app.route("/reports/salesman-month")
+@login_required
+def report_salesman_month():
+    con = db()
+    cur = con.cursor()
+
+    cur.execute("""
+        SELECT 
+            i.salesman,
+            i.inv_no,
+            i.date,
+            i.customer,
+            i.customer_address,
+            i.total
+        FROM invoices i
+        WHERE i.salesman != '' AND i.salesman IS NOT NULL
+        ORDER BY salesman ASC, date DESC
+    """)
+    rows = cur.fetchall()
+    con.close()
+
+    # سیلزمین وائز گروپنگ
+    from collections import defaultdict
+    salesman_data = defaultdict(list)
+
+    for salesman, inv_no, date, customer, address, total in rows:
+        salesman_data[salesman].append({
+            "inv_no": inv_no,
+            "date": date,
+            "customer": customer,
+            "address": address,
+            "total": float(total or 0)
+        })
+
+    html = TPL_H + """
+<style>
+  .salesman-section {
+    margin: 20px 0;
+    border: 1px solid #ccc;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  }
+  .salesman-header {
+    background: #1976d2;
+    color: white;
+    padding: 16px;
+    font-size: 20px;
+    font-weight: bold;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .salesman-header::after {
+    content: '▼';
+    transition: transform 0.3s;
+  }
+  details[open] .salesman-header::after {
+    transform: rotate(180deg);
+  }
+  .invoice-table {
+    padding: 15px;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  th, td {
+    padding: 10px;
+    text-align: left;
+    border-bottom: 1px solid #eee;
+  }
+  th {
+    background: #1976d2;
+    color: white;
+  }
+  .total {
+    background: #e8f5e9;
+    font-weight: bold;
+    text-align: right;
+    padding: 12px;
+  }
+  @media (max-width: 768px) {
+    thead { display: none; }
+    tr {
+      display: block;
+      margin-bottom: 12px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      background: white;
+    }
+    td {
+      display: block;
+      text-align: right;
+      position: relative;
+      padding-left: 50%;
+      border: none;
+    }
+    td:before {
+      content: attr(data-label);
+      position: absolute;
+      left: 10px;
+      width: 45%;
+      font-weight: bold;
+      text-align: left;
+    }
+  }
+</style>
+
+<h3>📊 Salesman Wise Invoices Report</h3>
+
+<button class="btn" onclick="history.back()" style="margin-bottom:20px;">← Back</button>
+
+{% for salesman, invoices in salesman_data.items() %}
+<details class="salesman-section">
+  <summary class="salesman-header">
+    {{ salesman }} — {{ invoices|length }} Invoices — 
+    Total Sales: Rs {{ "%.2f"|format(invoices|sum(attribute='total')) }}
+  </summary>
+
+  <div class="invoice-table">
+    <table>
+      <thead>
+        <tr>
+          <th>Invoice No</th>
+          <th>Date</th>
+          <th>Customer</th>
+          <th>Address</th>
+          <th>Total Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for inv in invoices %}
+        <tr>
+          <td data-label="Invoice No">{{ inv.inv_no }}</td>
+          <td data-label="Date">{{ inv.date }}</td>
+          <td data-label="Customer">{{ inv.customer }}</td>
+          <td data-label="Address">{{ inv.address }}</td>
+          <td data-label="Total Amount" style="font-weight:bold; color:#2e7d32;">
+            Rs {{ "%.2f"|format(inv.total) }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div class="total">
+      Grand Total for {{ salesman }}: Rs {{ "%.2f"|format(invoices|sum(attribute='total')) }}
+    </div>
+  </div>
+</details>
 {% endfor %}
+
+{% if not salesman_data %}
+<p style="text-align:center; padding:40px; color:#777;">
+  No invoices with salesman assigned yet.
+</p>
+{% endif %}
+
+<script>
+// ایک وقت میں صرف ایک سیلزمین کھلا رکھنے کا آپشن (اختیاری)
+document.querySelectorAll('.salesman-header').forEach(header => {
+  header.addEventListener('click', function(e) {
+    if (e.target.tagName !== 'SUMMARY') return;
+    document.querySelectorAll('details.salesman-section').forEach(d => {
+      if (d !== this.parentElement) d.open = false;
+    });
+  });
+});
+</script>
+""" + TPL_F
+
+    return render_template_string(
+        html,
+        salesman_data=salesman_data,
+        project=get_setting("project_name")
+    )
+
+
+@app.route("/reports/salesman")
+@login_required
+def report_salesman():
+
+    con = db()
+    cur = con.cursor()
+    cur.execute("""
+        SELECT salesman,
+               COUNT(*) AS invs,
+               SUM(total) AS total
+        FROM invoices
+        GROUP BY salesman
+        ORDER BY salesman
+    """)
+    rows = cur.fetchall()
+    con.close()
+
+    html = TPL_H + """
+    <h3>Salesman Wise Sales</h3>
+    <button class="btn" onclick="history.back()">⬅ Back</button>
+    <table>
+      <tr><th>Salesman</th><th>Invoices</th><th>Total</th></tr>
+      {% for r in rows %}
+      <tr>
+        <td>{{r[0]}}</td>
+        <td>{{r[1]}}</td>
+        <td>Rs {{'%.2f'|format(r[2] or 0)}}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    """ + TPL_F
+
+    return render_template_string(html, rows=rows, project=get_setting("project_name"))
+
+#---saleman list
+@app.route("/settings/salesmen", methods=["GET", "POST"])
+@login_required
+def settings_salesmen():
+    conn = db()
+    cur = conn.cursor()
+
+    message = ""
+    search_query = request.args.get("search", "").strip().lower()
+
+    if request.method == "POST":
+        action = request.form.get("action", "")
+
+        if action == "add":
+            name = request.form.get("name", "").strip()
+            role = request.form.get("role", "salesman").strip().lower()
+            if name:
+                try:
+                    cur.execute(
+                        "INSERT INTO salesmen (name, role, active, permissions) VALUES (?, ?, 1, ?)",
+                        (name, role, json.dumps({}))
+                    )
+                    conn.commit()
+                    message = f"Salesman '{name}' added with role '{role}'"
+                except sqlite3.IntegrityError:
+                    message = f"'{name}' already exists"
+            else:
+                message = "Name is required"
+
+        elif action == "update_role":
+            sid = request.form.get("sid")
+            new_role = request.form.get("new_role", "salesman").strip().lower()
+            if sid:
+                cur.execute("UPDATE salesmen SET role = ? WHERE id = ?", (new_role, sid))
+                conn.commit()
+                message = "Role updated"
+
+        elif action == "update_permissions":
+            sid = request.form.get("sid")
+            if sid:
+                permissions = {
+                    "view_all_invoices": "view_all_invoices" in request.form,
+                    "view_own_invoices": "view_own_invoices" in request.form,
+                    "view_stock": "view_stock" in request.form,
+                    "view_sale_record": "view_sale_record" in request.form,
+                    "view_expenses": "view_expenses" in request.form,
+                    "create_order_sheet": "create_order_sheet" in request.form,
+                    "convert_order_sheet": "convert_order_sheet" in request.form,
+                    "edit_records": "edit_records" in request.form
+                }
+                cur.execute("UPDATE salesmen SET permissions = ? WHERE id = ?",
+                            (json.dumps(permissions), sid))
+                conn.commit()
+                message = "Permissions saved successfully"
+
+        elif action == "delete":
+            sid = request.form.get("sid")
+            if sid:
+                cur.execute("DELETE FROM salesmen WHERE id = ?", (sid,))
+                conn.commit()
+                message = "Salesman deleted"
+
+    # Load salesmen with permissions
+    query = "SELECT id, name, role, active, permissions FROM salesmen"
+    params = []
+    if search_query:
+        query += " WHERE LOWER(name) LIKE ?"
+        params.append(f"%{search_query}%")
+    query += " ORDER BY name ASC"
+
+    cur.execute(query, params)
+    salesmen = []
+    for row in cur.fetchall():
+        permissions = json.loads(row[4]) if row[4] else {}
+        salesmen.append({
+            "id": row[0],
+            "name": row[1],
+            "role": row[2],
+            "active": row[3],
+            "permissions": permissions
+        })
+
+    conn.close()
+
+    html = TPL_H + """
+<h2>Settings - Salesmen Management</h2>
+
+{% if message %}
+<div style="padding:12px; background:#e8f5e9; border-left:5px solid #4caf50; margin:15px 0; border-radius:4px;">
+    {{ message }}
+</div>
+{% endif %}
+
+<!-- Search -->
+<form method="get" style="margin-bottom:20px;">
+    <input type="text" name="search" value="{{ request.args.get('search', '') }}" placeholder="Search by name..." style="padding:10px; width:300px; border:1px solid #ccc; border-radius:4px;">
+    <button type="submit" style="background:#2196f3; color:white; padding:10px 16px; border:none; border-radius:4px;">Search</button>
+    <a href="{{ url_for('settings_salesmen') }}" style="margin-left:10px; color:#555;">Clear</a>
+</form>
+
+<!-- Add New -->
+<div style="background:white; padding:20px; border-radius:8px; box-shadow:0 2px 10px rgba(0,0,0,0.08); margin-bottom:30px;">
+    <h3>Add New Salesman</h3>
+    <form method="post">
+        <input type="hidden" name="action" value="add">
+        <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:center;">
+            <input name="name" placeholder="Salesman Name" required style="flex:1; padding:10px; min-width:220px; border:1px solid #ccc; border-radius:4px;">
+            <select name="role" style="padding:10px; min-width:160px; border:1px solid #ccc; border-radius:4px;">
+                <option value="salesman">Salesman</option>
+                <option value="manager">Manager</option>
+                <option value="admin">Admin</option>
+            </select>
+            <button type="submit" style="background:#4caf50; color:white; padding:10px 20px; border:none; border-radius:4px;">Add</button>
+        </div>
+    </form>
+</div>
+
+<!-- List -->
+<h3>Current Salesmen ({{ salesmen|length }})</h3>
+
+{% if salesmen %}
+<table style="width:100%; border-collapse:collapse; background:white; box-shadow:0 2px 10px rgba(0,0,0,0.08);">
+    <thead style="background:#f5f5f5;">
+        <tr>
+            <th style="padding:12px; text-align:left;">Name</th>
+            <th style="padding:12px; text-align:center;">Role</th>
+            <th style="padding:12px; text-align:center; width:300px;">Permissions</th>
+            <th style="padding:12px; text-align:center;">Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for s in salesmen %}
+        <tr style="border-bottom:1px solid #eee;">
+            <td style="padding:12px; font-weight:500;">{{ s.name }}</td>
+            <td style="padding:12px; text-align:center;">
+                <form method="post" style="margin:0;">
+                    <input type="hidden" name="action" value="update_role">
+                    <input type="hidden" name="sid" value="{{ s.id }}">
+                    <select name="new_role" onchange="this.form.submit()" style="padding:6px; border-radius:4px;">
+                        <option value="salesman" {% if s.role == 'salesman' %}selected{% endif %}>Salesman</option>
+                        <option value="manager" {% if s.role == 'manager' %}selected{% endif %}>Manager</option>
+                        <option value="admin" {% if s.role == 'admin' %}selected{% endif %}>Admin</option>
+                    </select>
+                </form>
+            </td>
+            <td style="padding:12px; text-align:left;">
+                <form method="post" style="margin:0;">
+                    <input type="hidden" name="action" value="update_permissions">
+                    <input type="hidden" name="sid" value="{{ s.id }}">
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; font-size:0.9em;">
+                        <label style="display:flex; align-items:center; gap:6px;">
+                            <input type="checkbox" name="view_all_invoices" {% if s.permissions.get('view_all_invoices') %}checked{% endif %}>
+                            View All Invoices
+                        </label>
+                        <label style="display:flex; align-items:center; gap:6px;">
+                            <input type="checkbox" name="view_own_invoices" {% if s.permissions.get('view_own_invoices') %}checked{% endif %}>
+                            View Own Invoices
+                        </label>
+                        <label style="display:flex; align-items:center; gap:6px;">
+                            <input type="checkbox" name="view_stock" {% if s.permissions.get('view_stock') %}checked{% endif %}>
+                            View Stock
+                        </label>
+                        <label style="display:flex; align-items:center; gap:6px;">
+                            <input type="checkbox" name="view_sale_record" {% if s.permissions.get('view_sale_record') %}checked{% endif %}>
+                            View Sale Record
+                        </label>
+                        <label style="display:flex; align-items:center; gap:6px;">
+                            <input type="checkbox" name="view_expenses" {% if s.permissions.get('view_expenses') %}checked{% endif %}>
+                            View Expenses
+                        </label>
+                        <label style="display:flex; align-items:center; gap:6px;">
+                            <input type="checkbox" name="create_order_sheet" {% if s.permissions.get('create_order_sheet') %}checked{% endif %}>
+                            Create Order Sheet
+                        </label>
+                        <label style="display:flex; align-items:center; gap:6px;">
+                            <input type="checkbox" name="convert_order_sheet" {% if s.permissions.get('convert_order_sheet') %}checked{% endif %}>
+                            Convert Order Sheet
+                        </label>
+                        <label style="display:flex; align-items:center; gap:6px;">
+                            <input type="checkbox" name="edit_records" {% if s.permissions.get('edit_records') %}checked{% endif %}>
+                            Edit Records
+                        </label>
+                    </div>
+                    <button type="submit" style="margin-top:12px; background:#2196f3; color:white; padding:8px 16px; border:none; border-radius:4px; cursor:pointer;">Save Permissions</button>
+                </form>
+            </td>
+            <td style="padding:12px; text-align:center;">
+                <form method="post" onsubmit="return confirm('Delete {{ s.name }}?');" style="display:inline;">
+                    <input type="hidden" name="action" value="delete">
+                    <input type="hidden" name="sid" value="{{ s.id }}">
+                    <button type="submit" style="background:#f44336; color:white; padding:8px 14px; border:none; border-radius:4px; cursor:pointer;">Delete</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
 </table>
 {% else %}
-<p class="small">No summary PDFs found.</p>
+<div style="text-align:center; padding:40px; color:#777; background:#fafafa; border-radius:8px;">
+    No salesmen added yet.
+</div>
 {% endif %}
-""" + TPL_F
-    return render_template_string(html, rows=rows, total_sales=total_sales, labels=labels, data=data, summary_files=summary_files, project=get_setting("project_name"))
+
+<a href="{{ url_for('home') }}" class="btn" style="margin-top:30px; display:inline-block;">← Back to Home</a>
+    """ + TPL_F
+
+    return render_template_string(html, salesmen=salesmen, message=message, project=get_setting("project_name"))
+
 
 @app.route("/open_summary/<year>/<month>/<path:fn>")
 @login_required
@@ -2788,20 +3439,87 @@ def open_pdf_path(y, m, fn):
         return redirect(url_for("reports"))
     return send_from_directory(base, fn)
 
+from flask import send_file, abort
+
 @app.route("/view_pdf/<int:y>/<m>/<path:fn>")
 @login_required
-def view_pdf(y,m,fn):
+def view_pdf(y, m, fn):
+    # مکمل فائل کا پاتھ بنائیں (آپ کے output_base() فنکشن کے مطابق)
+    pdf_dir = output_base() / "BusinessRecords" / str(y) / m
+    pdf_path = pdf_dir / fn
+
+    # سیکیورٹی چیک: فائل موجود ہے؟ اور PDF ہے؟
+    if not pdf_path.exists() or not pdf_path.is_file() or not fn.lower().endswith('.pdf'):
+        abort(404, description="PDF file not found or invalid format")
+
+    # اگر ?print=1 ہے تو براہ راست پرنٹ کرنے کے لیے send_file استعمال کریں
+    if request.args.get('print') == '1':
+        return send_file(
+            pdf_path,
+            mimetype='application/pdf',
+            as_attachment=False,
+            conditional=True
+        )
+
+    # نارمل ویو: ایمبیڈ کے ساتھ HTML
     html = """
-<!doctype html><title>View Invoice</title>
-<style>body{margin:0}</style>
-<embed src="{{url_for('open_pdf_path', y=y, m=m, fn=fn)}}" type="application/pdf" width="100%" height="100%" id="pdfembed">
-<script>
-if (location.search.indexOf('print=1')>=0){
-  setTimeout(function(){ try{ window.print(); }catch(e){ window.print(); } }, 600);
-}
-</script>
-"""
-    return render_template_string(html, y=y, m=m, fn=fn)
+<!doctype html>
+<html lang="ur" dir="rtl">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF دیکھیں – {{ fn }}</title>
+    <style>
+        body, html { margin:0; padding:0; height:100%; overflow:hidden; font-family: system-ui, sans-serif; }
+        #pdf-container { height:100vh; width:100vw; }
+        #pdfembed { width:100%; height:100%; border:none; }
+        #toolbar {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            z-index: 1000;
+            background: rgba(0,0,0,0.6);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+        #toolbar a { color: #4fc3f7; text-decoration: none; margin-left: 12px; }
+    </style>
+</head>
+<body>
+    <div id="pdf-container">
+        <embed src="{{ url_for('serve_pdf_file', path=pdf_path.relative_to(output_base())) }}" 
+               type="application/pdf" 
+               width="100%" 
+               height="100%" 
+               id="pdfembed">
+    </div>
+
+    <div id="toolbar">
+        <strong>فائل:</strong> {{ fn }} &nbsp;|&nbsp;
+        <a href="{{ url_for('view_pdf', y=y, m=m, fn=fn, print=1) }}" target="_blank">🖨️ پرنٹ کریں</a>
+    </div>
+
+    <script>
+        // اگر موبائل ہے تو ایمبیڈ کو بہتر بنائیں
+        if (/Mobi|Android/i.test(navigator.userAgent)) {
+            document.getElementById('pdfembed').setAttribute('src', 
+                '{{ url_for('serve_pdf_file', path=pdf_path.relative_to(output_base())) }}');
+        }
+    </script>
+</body>
+</html>
+    """
+
+    return render_template_string(
+        html,
+        y=y,
+        m=m,
+        fn=fn,
+        pdf_path=pdf_path,  # اگر ضرورت ہو تو
+        output_base=output_base
+    )
 
 # ---------- Settings ----------
 @app.route("/settings", methods=["GET","POST"])
@@ -2858,6 +3576,7 @@ def settings():
     # GET request - فارم دکھائیں
     html = TPL_H + """
 <h3>Settings</h3>
+<a href="/settings/salesmen" class="btn">Salesmen</a>
 <form method="post" enctype="multipart/form-data">
   <div class="top" style="align-items:flex-start;">
     <div style="flex:1;">
@@ -2940,93 +3659,161 @@ def settings():
 @app.route("/sales_record")
 @login_required
 def sales_record():
-    # CSV سے ڈیٹا لوڈ کریں
-    invoices = read_csv(INVOICES)
-    lines = read_csv(LINES)
+    from collections import defaultdict
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
 
-    monthly_data = {}  # month_name -> list of {'product': str, 'qty': float}
-    grand_totals = {}  # month_name -> total qty
+    # ماہانہ پروڈکٹ وائز سیلڈ مقدار (SQLite سے)
+    c.execute("""
+        SELECT 
+            strftime('%Y-%m', date) AS ym,
+            strftime('%B %Y', date) AS month_name,
+            product,
+            SUM(qty) AS total_qty
+        FROM sales_log
+        GROUP BY ym, product
+        ORDER BY ym DESC, total_qty DESC
+    """)
+    rows = c.fetchall()
+    conn.close()
 
-    for line in lines:
-        inv_no = line.get("inv_no")
-        inv = next((i for i in invoices if i.get("inv_no") == inv_no), None)
-        if not inv:
+    # ڈیٹا کو گروپ کریں
+    monthly_data = defaultdict(list)
+    grand_totals = defaultdict(float)
+
+    for ym, month_name, product, qty in rows:
+        if not month_name:  # خالی مہینہ چھوڑ دیں
             continue
+        monthly_data[month_name].append({
+            "sr_no": 0,  # بعد میں اپ ڈیٹ کریں گے
+            "product": to_caps(product),
+            "qty": float(qty or 0)
+        })
+        grand_totals[month_name] += float(qty or 0)
 
-        date_str = inv.get("date", "")
-        try:
-            # مختلف فارمیٹس کو ہینڈل کریں (dd-mm-yy, dd-mm-yyyy, yyyy-mm-dd)
-            if "-" in date_str:
-                parts = date_str.split("-")
-                if len(parts) == 3:
-                    if len(parts[2]) == 2:
-                        dt = datetime.datetime.strptime(date_str, "%d-%m-%y")
-                    elif len(parts[2]) == 4 and len(parts[0]) == 4:
-                        dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
-                    else:
-                        dt = datetime.datetime.strptime(date_str, "%d-%m-%Y")
-            else:
-                continue
-            month_name = dt.strftime("%B %Y")  # e.g. January 2026
-        except:
-            continue
+    # ہر مہینے میں Sr No شامل کریں (نمبرنگ)
+    for month_name, items in monthly_data.items():
+        for index, item in enumerate(items, start=1):
+            item["sr_no"] = index
 
-        prod = to_caps(line.get("product", "Unknown"))
-        try:
-            qty = float(line.get("qty", 0) or 0)
-        except:
-            qty = 0.0
-
-        if qty <= 0:
-            continue
-
-        if month_name not in monthly_data:
-            monthly_data[month_name] = {}
-            grand_totals[month_name] = 0.0
-
-        if prod not in monthly_data[month_name]:
-            monthly_data[month_name][prod] = 0.0
-
-        monthly_data[month_name][prod] += qty
-        grand_totals[month_name] += qty
-
-    # ہر مہینے کے لیے لسٹ بنائیں اور qty کے حساب سے سارٹ کریں
-    result = {}
-    for month, prods in monthly_data.items():
-        items = [{"product": p, "qty": q} for p, q in sorted(prods.items(), key=lambda x: x[1], reverse=True)]
-        result[month] = items
-
-    # مہینوں کو نیا سے پرانا کی طرف سارٹ کریں
-    sorted_months = sorted(result.keys(), key=lambda x: datetime.datetime.strptime(x, "%B %Y"), reverse=True)
-    sorted_result = {m: result[m] for m in sorted_months}
+    # مہینوں کو ڈیٹ کے لحاظ سے ترتیب دیں (سب سے نیا پہلے)
+    sorted_months = sorted(
+        monthly_data.keys(),
+        key=lambda m: datetime.datetime.strptime(m, "%B %Y") if isinstance(m, str) else datetime.datetime.min,
+        reverse=True
+    )
 
     html = TPL_H + """
-<h2>📊 Sales Record (Product-wise Monthly Quantity Sold)</h2>
-<p class="small">Monthly Salw QTY (CSV based)</p>
+<style>
+  .month-card {
+    margin-bottom: 25px;
+    border: 1px solid #ddd;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  }
+  .month-header {
+    background: #1976d2;
+    color: white;
+    padding: 16px;
+    font-size: 19px;
+    font-weight: bold;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .month-header::after {
+    content: '▼';
+    transition: transform 0.3s;
+  }
+  details[open] .month-header::after {
+    transform: rotate(180deg);
+  }
+  .table-container {
+    padding: 15px;
+    overflow-x: auto;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  th, td {
+    padding: 10px;
+    text-align: left;
+    border-bottom: 1px solid #eee;
+  }
+  th {
+    background: #1976d2;
+    color: white;
+  }
+  .total-row {
+    background: #e8f5e9;
+    font-weight: bold;
+    text-align: right;
+  }
+  .search-box {
+    width: 100%;
+    max-width: 700px;
+    padding: 14px;
+    font-size: 16px;
+    border-radius: 10px;
+    border: 2px solid #1976d2;
+    margin: 20px 0;
+  }
+  @media (max-width: 768px) {
+    thead { display: none; }
+    tr {
+      display: block;
+      margin-bottom: 12px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      background: white;
+    }
+    td {
+      display: block;
+      text-align: right;
+      position: relative;
+      padding-left: 50%;
+      border: none;
+    }
+    td:before {
+      content: attr(data-label);
+      position: absolute;
+      left: 10px;
+      width: 45%;
+      font-weight: bold;
+      text-align: left;
+    }
+  }
+</style>
 
-<input type="text" id="globalSearch" placeholder="🔍 search product name" 
-       style="width:100%;max-width:700px;padding:14px;font-size:16px;border-radius:10px;border:2px solid #1976d2;margin:20px 0;">
+<h2>📊 Sales Record (Monthly Product-wise)</h2>
 
-{% if sorted_result %}
-  {% for month, items in sorted_result.items() %}
-  <div class="card" style="margin-bottom:30px;box-shadow:0 4px 15px rgba(0,0,0,0.08);border-radius:12px;overflow:hidden;">
-    <h3 style="background:#1976d2;color:white;padding:16px;margin:0;font-size:19px;">
-      {{ month }}
-      <span style="float:right;font-size:17px;">Total QTY: <strong>{{ "%.2f"|format(grand_totals[month]) }}</strong></span>
-    </h3>
-    <div style="padding:20px;">
-      <table style="width:100%;border-collapse:collapse;">
-        <thead style="background:#e3f2fd;">
+<input type="text" id="globalSearch" class="search-box"
+       placeholder="🔍 Search product name...">
+
+{% if sorted_months %}
+  {% for month in sorted_months %}
+  <details class="month-card">
+    <summary class="month-header">
+      {{ month }} — Total Sold Qty: {{ "%.2f"|format(grand_totals[month]) }} ⬇
+    </summary>
+    <div class="table-container">
+      <table>
+        <thead>
           <tr>
-            <th style="padding:12px;text-align:left;">Product Name</th>
-            <th style="padding:12px;text-align:center;width:200px;">Saled QTY</th>
+            <th>Sr No</th>
+            <th>Product</th>
+            <th>Sold Qty</th>
           </tr>
         </thead>
         <tbody>
-          {% for item in items %}
-          <tr class="search-row">
-            <td style="padding:12px;font-weight:600;">{{ item.product }}</td>
-            <td style="padding:12px;text-align:center;font-weight:bold;font-size:17px;color:#1565c0;">
+          {% for item in monthly_data[month] %}
+          <tr class="searchable">
+            <td data-label="Sr No">{{ item.sr_no }}</td>
+            <td data-label="Product">{{ item.product }}</td>
+            <td data-label="Sold Qty" style="font-weight:bold; color:#1565c0; text-align:center;">
               {{ "%.2f"|format(item.qty) }}
             </td>
           </tr>
@@ -3034,30 +3821,402 @@ def sales_record():
         </tbody>
       </table>
     </div>
-  </div>
+  </details>
   {% endfor %}
 {% else %}
-  <div class="card" style="text-align:center;padding:50px;color:#666;background:#f9f9f9;">
-    <h3> No Record Found</h3>
-    <p>Data will show after creating invoice۔</p>
+  <div class="card" style="text-align:center; padding:50px; color:#666;">
+    <h3>No Sales Record Found</h3>
+    <p>Data will appear after sales are recorded.</p>
   </div>
 {% endif %}
 
+<div style="text-align:center; margin-top:40px;">
+  <a href="{{ url_for('home') }}" class="btn" style="padding:14px 45px; font-size:18px;">
+    ⬅ Back to Home
+  </a>
+</div>
+
 <script>
+// Global Search Filter
 document.getElementById('globalSearch').addEventListener('keyup', function() {
   let val = this.value.toLowerCase().trim();
-  document.querySelectorAll('.search-row').forEach(row => {
-    let text = row.textContent.toLowerCase();
-    row.style.display = text.includes(val) ? '' : 'none';
+  document.querySelectorAll('.searchable').forEach(row => {
+    row.style.display = row.innerText.toLowerCase().includes(val) ? '' : 'none';
   });
 });
 </script>
+""" + TPL_F
 
-<p style="text-align:center;margin-top:40px;">
-  <a href="{{ url_for('home') }}" class="btn" style="padding:14px 40px;font-size:18px;background:#424242;">
-    ← Back to Home
+    return render_template_string(
+        html,
+        sorted_months=sorted_months,
+        monthly_data=monthly_data,
+        grand_totals=grand_totals,
+        project=get_setting("project_name")
+    )
+
+# ================== Stock Entry (Final – Clean & Working) ==================
+# ---------- STOCK ENTRY (SQLITE + SMART AUTOSUGGEST) ----------
+@app.route("/stock_entry", methods=["GET", "POST"])
+@login_required
+def stock_entry():
+
+    msg = ""
+    now = datetime.datetime.now()
+
+    # ---------- POST ----------
+    if request.method == "POST":
+        action = request.form.get("action","")
+
+        con = db()
+        cur = con.cursor()
+
+        # ----- DELETE ENTRY -----
+        if action == "delete":
+            eid = request.form.get("entry_id")
+
+            cur.execute("SELECT product, qty FROM purchases WHERE id=?", (eid,))
+            row = cur.fetchone()
+            if row:
+                product, qty = row
+                cur.execute("""
+                    UPDATE products
+                    SET stock = MAX(0, stock - ?)
+                    WHERE name=?
+                """, (qty, product))
+                cur.execute("DELETE FROM purchases WHERE id=?", (eid,))
+                con.commit()
+                flash("Entry deleted & stock updated")
+
+            con.close()
+            return redirect(url_for("stock_entry"))
+
+        # ----- ADD ENTRY -----
+        product = to_caps(request.form.get("product","").strip())
+        qty_str = request.form.get("qty","").strip()
+        price_str = request.form.get("price","").strip()
+
+        try:
+            qty = float(qty_str)
+            if qty <= 0:
+                raise ValueError
+        except:
+            msg = "Quantity invalid"
+        else:
+            # check product
+            cur.execute("SELECT unit_price FROM products WHERE name=?", (product,))
+            row = cur.fetchone()
+
+            if row:
+                # old product → price optional
+                price = float(price_str) if price_str else (row[0] or 0.0)
+            else:
+                # new product → price required
+                if not price_str:
+                    msg = "New product ke liye price lazmi hai"
+                    con.close()
+                    return redirect(url_for("stock_entry"))
+                price = float(price_str)
+
+            # upsert product
+            cur.execute("""
+                INSERT INTO products (name, stock, unit_price)
+                VALUES (?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    stock = stock + excluded.stock,
+                    unit_price = excluded.unit_price
+            """, (product, qty, price))
+
+            # save purchase
+            cur.execute("""
+                INSERT INTO purchases (date, product, qty, price)
+                VALUES (date('now'), ?, ?, ?)
+            """, (product, qty, price))
+
+            con.commit()
+            con.close()
+            flash(f"{qty} × {product} added to stock")
+            return redirect(url_for("stock_entry"))
+
+    # ---------- FILTERS ----------
+    product_filter = request.args.get("product_filter","").strip().upper()
+    from_date = request.args.get("from_date","")
+    to_date = request.args.get("to_date","")
+
+    con = db()
+    cur = con.cursor()
+
+    # ---------- PRODUCTS (for autosuggest + price) ----------
+    cur.execute("SELECT name, unit_price FROM products ORDER BY name")
+    product_list = [{"name":r[0], "price":r[1]} for r in cur.fetchall()]
+
+    # ---------- MONTH GROUP ----------
+    cur.execute("""
+        SELECT substr(date,1,7) ym,
+               COUNT(*),
+               SUM(qty)
+        FROM purchases
+        GROUP BY ym
+        ORDER BY ym DESC
+    """)
+    months = cur.fetchall()
+
+    data = []
+    for ym, cnt, total in months:
+        sql = """
+            SELECT id, date, product, qty, price
+            FROM purchases
+            WHERE substr(date,1,7)=?
+        """
+        params = [ym]
+
+        if product_filter:
+            sql += " AND UPPER(product) LIKE ?"
+            params.append(f"%{product_filter}%")
+        if from_date:
+            sql += " AND date >= ?"
+            params.append(from_date)
+        if to_date:
+            sql += " AND date <= ?"
+            params.append(to_date)
+
+        sql += " ORDER BY date DESC, id DESC"
+        cur.execute(sql, params)
+
+        data.append({
+            "month": ym,
+            "count": cnt,
+            "total": total or 0,
+            "rows": cur.fetchall()
+        })
+
+    con.close()
+
+    # ---------- UI ----------
+    html = TPL_H + """
+<h2>Stock Entry</h2>
+<button class="btn" onclick="history.back()">⬅ Back</button>
+<a href="{{ url_for('stock_summary') }}" class="btn">
+  📦 Stock Summary
+</a>
+
+
+{% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
+
+<form method="post" style="margin-top:20px;position:relative;">
+  <input id="product" name="product" placeholder="Product name"
+         oninput="filterProducts(this.value)" autocomplete="off" required>
+
+  <div id="suggestions"
+       style="border:1px solid #ccc;max-height:180px;overflow:auto;
+              display:none;position:absolute;background:white;z-index:999;"></div>
+
+  <input name="qty" type="number" step="any" placeholder="Quantity" required>
+  <input id="price" name="price" type="number" step="any"
+         placeholder="Purchase price (new product ke liye zaroori)">
+  <button class="btn" style="background:#1b5e20">Add Stock</button>
+</form>
+
+<form method="get" style="margin-top:20px;">
+  <input name="product_filter" placeholder="Filter product">
+  <input type="date" name="from_date">
+  <input type="date" name="to_date">
+  <button class="btn">Filter</button>
+</form>
+
+{% for m in data %}
+<details open style="margin-top:30px;">
+  <summary style="font-size:18px;font-weight:bold;cursor:pointer">
+    📁 {{m.month}} | Entries: {{m.count}} | Total Qty: {{m.total}}
+  </summary>
+
+  <table style="width:100%;margin-top:10px;">
+    <tr><th>ID</th><th>Date</th><th>Product</th><th>Qty</th><th>Price</th><th>Action</th></tr>
+    {% for r in m.rows %}
+    <tr>
+      <td>{{r[0]}}</td>
+      <td>{{r[1]}}</td>
+      <td>{{r[2]}}</td>
+      <td>{{r[3]}}</td>
+      <td>{{r[4]}}</td>
+      <td>
+        <form method="post" style="display:inline;">
+          <input type="hidden" name="action" value="delete">
+          <input type="hidden" name="entry_id" value="{{r[0]}}">
+          <button class="btn" style="background:#c62828"
+            onclick="return confirm('Delete this entry? Stock reduce hoga')">
+            Delete
+          </button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</details>
+{% endfor %}
+
+<script>
+const products = {{ product_list|tojson }};
+
+function filterProducts(q){
+  q=q.toLowerCase();
+  let box=document.getElementById("suggestions");
+  box.innerHTML="";
+  if(!q){box.style.display="none";return;}
+  products.forEach(p=>{
+    if(p.name.toLowerCase().includes(q)){
+      let d=document.createElement("div");
+      d.innerText=p.name;
+      d.style.padding="6px";
+      d.style.cursor="pointer";
+      d.onclick=()=>{
+        document.getElementById("product").value=p.name;
+        document.getElementById("price").value=p.price||"";
+        box.style.display="none";
+      };
+      box.appendChild(d);
+    }
+  });
+  box.style.display=box.children.length?"block":"none";
+}
+</script>
+""" + TPL_F
+
+    return render_template_string(
+        html,
+        msg=msg,
+        data=data,
+        product_list=product_list,
+        project=get_setting("project_name")
+    )
+
+# ========================================
+@app.route("/stock_summary")
+@login_required
+def stock_summary():
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
+    # ---------- Get monthly product totals ----------
+    c.execute("""
+        SELECT
+            substr(date,1,7) AS ym,   -- YYYY-MM
+            product,
+            SUM(qty) AS total_qty
+        FROM purchases
+        WHERE date IS NOT NULL AND date != ''
+        GROUP BY ym, product
+        ORDER BY ym DESC, total_qty DESC
+    """)
+    rows = c.fetchall()
+    conn.close()
+
+    monthly_data = {}   # month_name -> list
+    grand_totals = {}   # month_name -> total qty
+
+    for ym, prod, qty in rows:
+        if not ym:
+            continue
+
+        # ✅ SAFE month name generation
+        try:
+            month_name = datetime.datetime.strptime(ym, "%Y-%m").strftime("%B %Y")
+        except:
+            continue
+
+        if month_name not in monthly_data:
+            monthly_data[month_name] = []
+            grand_totals[month_name] = 0.0
+
+        monthly_data[month_name].append({
+            "product": prod,
+            "qty": float(qty)
+        })
+        grand_totals[month_name] += float(qty)
+
+    if not monthly_data:
+        flash("No stock entry data found yet.")
+        return redirect(url_for("stock_entry"))
+
+    # sort months (latest first)
+    sorted_months = sorted(
+        monthly_data.keys(),
+        key=lambda x: datetime.datetime.strptime(x, "%B %Y"),
+        reverse=True
+    )
+    sorted_result = {m: monthly_data[m] for m in sorted_months}
+
+    # ================= UI =================
+    html = TPL_H + """
+<h2>📦 Stock Summary (Monthly)</h2>
+<p class="small">Stock entered via Stock Entry</p>
+
+<input type="text" id="globalSearch"
+       placeholder="🔍 Type product name..."
+       style="width:100%;max-width:650px;padding:14px;font-size:16px;
+              border-radius:10px;border:2px solid #1976d2;margin:20px 0;">
+
+{% for month, items in sorted_result.items() %}
+<div class="card" style="margin-bottom:25px;border-radius:12px;overflow:hidden;">
+
+  <!-- Foldable Header -->
+  <button onclick="toggleMonth('{{ loop.index }}')"
+          style="width:100%;background:#1976d2;color:white;
+                 border:none;padding:16px;font-size:18px;text-align:left;">
+    {{ month }}
+    <span style="float:right;">
+      Total Qty: {{ "%.2f"|format(grand_totals[month]) }} ⬇
+    </span>
+  </button>
+
+  <!-- Foldable Body -->
+  <div id="month_{{ loop.index }}" style="display:none;padding:20px;">
+    <table style="width:100%;border-collapse:collapse;">
+      <thead style="background:#e3f2fd;">
+        <tr>
+          <th style="padding:12px;text-align:left;">Product</th>
+          <th style="padding:12px;text-align:center;width:180px;">Total Qty</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in items %}
+        <tr class="search-row">
+          <td style="padding:12px;font-weight:600;">{{ item.product }}</td>
+          <td style="padding:12px;text-align:center;font-weight:bold;">
+            {{ "%.2f"|format(item.qty) }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+</div>
+{% endfor %}
+
+<div style="text-align:center;margin-top:40px;">
+  <a href="{{ url_for('stock_entry') }}" class="btn"
+     style="padding:14px 45px;font-size:18px;">
+    ⬅ Back to Stock Entry
   </a>
-</p>
+</div>
+
+<script>
+// strong typing filter
+document.getElementById('globalSearch').addEventListener('keyup', function() {
+  let v = this.value.toLowerCase();
+  document.querySelectorAll('.search-row').forEach(r => {
+    r.style.display = r.innerText.toLowerCase().includes(v) ? '' : 'none';
+  });
+});
+
+// fold / unfold
+function toggleMonth(i){
+  let el = document.getElementById("month_" + i);
+  el.style.display = el.style.display === "none" ? "block" : "none";
+}
+</script>
 """ + TPL_F
 
     return render_template_string(
@@ -3067,549 +4226,223 @@ document.getElementById('globalSearch').addEventListener('keyup', function() {
         project=get_setting("project_name")
     )
 
-# ================== Stock Entry (Final – Clean & Working) ==================
-@app.route("/stock_entry", methods=["GET", "POST"])
-@login_required
-def stock_entry():
-    msg = ""
-    now = datetime.datetime.now()
-    month_folder = ensure_out_dirs(now.year, now.strftime("%B"))
-    stock_report_file = month_folder / f"Stock_Entry_{now.year}_{now.strftime('%B')}.csv"
-    # اگر فائل نہیں تو بنائیں
-    if not stock_report_file.exists():
-        with open(stock_report_file, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(["Entry_ID", "Date", "Product", "Quantity", "Purchase_Price"])
-    if request.method == "POST":
-        action = request.form.get("action")
-        if action == "delete":
-            entry_id = request.form.get("entry_id")
-            entries = []
-            with open(stock_report_file, "r", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                entries = list(reader)
-            new_entries = []
-            deleted = False
-            for e in entries:
-                if e["Entry_ID"] == entry_id:
-                    try:
-                        qty = float(e["Quantity"])
-                        prod = e["Product"]
-                        rows = read_csv(PRODUCTS)
-                        for r in rows:
-                            if r["name"] == prod:
-                                r["stock"] = f"{max(0.0, float(r.get('stock',0) or 0) - qty):.2f}"
-                        write_csv(PRODUCTS, rows, ["name","unit_price","purchase_price","stock","min_stock"])
-                        deleted = True
-                    except:
-                        pass
-                else:
-                    new_entries.append(e)
-            if deleted:
-                with open(stock_report_file, "w", newline="", encoding="utf-8") as f:
-                    writer = csv.DictWriter(f, fieldnames=["Entry_ID", "Date", "Product", "Quantity", "Purchase_Price"])
-                    writer.writeheader()
-                    writer.writerows(new_entries)
-                flash("Entry deleted successfully. Stock reduced.")
-            return redirect(url_for("stock_entry"))
-        # نارمل ایڈ
-        product = to_caps(request.form.get("product", "").strip())
-        qty_str = request.form.get("qty", "").strip()
-        price_str = request.form.get("price", "").strip()
-        if not product or not qty_str or not price_str:
-            msg = "Please fill all fields"
-        else:
-            try:
-                qty = float(qty_str)
-                price = float(price_str)
-                if qty <= 0:
-                    raise ValueError
-            except:
-                msg = "Quantity and Price must be valid numbers"
-            else:
-                # products.csv میں سٹاک بڑھائیں
-                rows = read_csv(PRODUCTS)
-                found = False
-                for r in rows:
-                    if r["name"].lower() == product.lower():
-                        r["stock"] = f"{float(r.get('stock',0) or 0) + qty:.2f}"
-                        r["unit_price"] = f"{price:.2f}"
-                        found = True
-                        break
-                if not found:
-                    rows.append({"name": product, "unit_price": f"{price:.2f}", "stock": f"{qty:.2f}", "min_stock": "0"})
-                write_csv(PRODUCTS, rows, ["name","unit_price","purchase_price","stock","min_stock"])
-                # Monthly رپورٹ میں انٹری
-                entries = []
-                try:
-                    with open(stock_report_file, "r", encoding="utf-8") as f:
-                        reader = csv.DictReader(f)
-                        entries = list(reader)
-                except:
-                    pass
-                new_id = str(len(entries) + 1).zfill(4)
-                entries.insert(0, {
-                    "Entry_ID": new_id,
-                    "Date": now.strftime("%d-%m-%Y"),
-                    "Product": product,
-                    "Quantity": qty,
-                    "Purchase_Price": price
-                })
-                with open(stock_report_file, "w", newline="", encoding="utf-8") as f:
-                    writer = csv.DictWriter(f, fieldnames=["Entry_ID", "Date", "Product", "Quantity", "Purchase_Price"])
-                    writer.writeheader()
-                    writer.writerows(entries)
-                # SQLite کی بجائے CSV سے product_list حاصل کریں
-                product_list = sorted([p['name'] for p in load_products()])
- 
-                flash(f" {qty} × {product} Successfully Entered")
-                return redirect(url_for("stock_entry"))
-    # GET - ڈیٹا تیار کریں
-    entries = []
-    try:
-        with open(stock_report_file, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            entries = list(reader)
-    except:
-        entries = []
-    # Filters apply کریں
-    product_filter = request.args.get("product_filter", "").strip().upper()
-    from_date_str = request.args.get("from_date")
-    to_date_str = request.args.get("to_date")
-    filtered_entries = []
-    totals = {} # پروڈکٹ وائز ٹوٹل
-    for e in entries:
-        match = True
-        if product_filter and product_filter not in e["Product"].upper():
-            match = False
-        if from_date_str or to_date_str:
-            try:
-                entry_date = datetime.datetime.strptime(e["Date"], "%d-%m-%Y").date()
-                if from_date_str:
-                    f_date = datetime.datetime.strptime(from_date_str, "%Y-%m-%d").date()
-                    if entry_date < f_date:
-                        match = False
-                if to_date_str:
-                    t_date = datetime.datetime.strptime(to_date_str, "%Y-%m-%d").date()
-                    if entry_date > t_date:
-                        match = False
-            except:
-                match = False
-        if match:
-            filtered_entries.append(e)
-            prod = e["Product"]
-            qty = float(e["Quantity"])
-            totals[prod] = totals.get(prod, 0.0) + qty
-    # SQLite کی بجائے CSV سے product_list حاصل کریں
-    product_list = sorted([p['name'] for p in load_products()])
-    # HTML بالکل صاف — کوئی f-string میں Jinja نہیں
-    html = TPL_H + """
-<h2>Stock Entry + Monthly Report</h2>
-{% if msg %}<div class="notice">{{ msg }}</div>{% endif %}
-<p style="margin:20px 0;text-align:center;">
-  <a href="{{ url_for('stock_summary') }}" class="btn" style="background:#1976d2;color:white;padding:14px 40px;font-size:18px;">
-    📊 View Full Monthly Stock Summary
-  </a>
-</p>
-<form method="post">
-  <input name="product" list="allprods" placeholder="Product Name" required style="width:350px;padding:12px;font-size:16px">
-  <datalist id="allprods">
-    {% for p in product_list %}
-      <option value="{{ p }}">
-    {% endfor %}
-  </datalist>
-  <input name="qty" type="number" step="any" placeholder="Quantity" required style="width:180px;padding:12px;margin:0 10px">
-  <input name="price" type="number" step="any" placeholder="Selling Price" required style="width:180px;padding:12px">
-  <button class="btn" style="padding:14px 40px;font-size:18px;background:#1b5e20;color:white;">Add to Stock</button>
-</form>
-<h3 style="margin-top:40px;">Stock Entries – {{ month_name }} {{ year }}</h3>
-<table style="width:100%;margin-top:10px;">
-  <thead style="background:black;color:black;">
-    <tr><th>ID</th><th>Date</th><th>Product</th><th>Qty</th><th>Price</th><th>Action</th></tr>
-  </thead>
-  <tbody>
-    {% for e in entries %}
-    <tr>
-      <td>{{ e.Entry_ID }}</td>
-      <td>{{ e.Date }}</td>
-      <td><strong>{{ e.Product }}</strong></td>
-      <td>{{ e.Quantity }}</td>
-      <td>Rs {{ e.Purchase_Price }}</td>
-      <td>
-        <form method="post" style="display:inline;">
-          <input type="hidden" name="action" value="delete">
-          <input type="hidden" name="entry_id" value="{{ e.Entry_ID }}">
-          <button class="btn" style="background:#c62828;padding:6px 12px;"
-                  onclick="return confirm('Delete this entry? Stock will be reduced')">Delete</button>
-        </form>
-      </td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
-{% if not entries %}
-<p style="text-align:center;color:#888;margin-top:20px;">کوئی انٹری نہیں</p>
-{% endif %}
-<p class="small" style="margin-top:20px;">
-  رپورٹ محفوظ ہے: <code>{{ report_path }}</code>
-</p>
-""" + TPL_F
-    return render_template_string(
-        html,
-        msg=msg,
-        product_list=product_list,
-        entries=entries,
-        month_name=now.strftime("%B"),
-        year=now.year,
-        report_path=str(stock_report_file),
-        project=get_setting("project_name")
-    )
+
+
+# 5 PROFESSIONAL ENGLISH CARDS - FINAL VERSION
 # ========================================
-@app.route("/stock_summary")
+
+
+@app.route("/target", methods=["GET", "POST"])
 @login_required
-def stock_summary():
-    base = output_base() / "BusinessRecords"
-    if not base.exists():
-        flash("No report folder found yet.")
-        return redirect(url_for("stock_entry"))
+def target():
 
-    all_months = {}
-    for year_dir in sorted(base.iterdir(), reverse=True):
-        if not year_dir.is_dir():
+    import calendar
+
+    today = datetime.date.today()
+    current_month = today.strftime("%B %Y")
+
+    con = sqlite3.connect(DB_FILE)
+    cur = con.cursor()
+
+    # ---------- SETTINGS ----------
+    growth = float(get_setting("growth_rate", "10"))
+
+    # ---------- PRODUCTS ----------
+    cur.execute("SELECT name FROM products ORDER BY name")
+    products = [r[0] for r in cur.fetchall()]
+
+    # ---------- SAVE / DELETE MANUAL TARGET ----------
+    if request.method == "POST":
+        action = request.form.get("action","")
+
+        # DELETE
+        if action == "delete":
+            cur.execute(
+                "DELETE FROM targets WHERE product=? AND month=?",
+                (request.form["product_del"], request.form["month_del"])
+            )
+            con.commit()
+            return redirect(url_for("target"))
+
+        # SAVE (FIRST MONTH MANUAL)
+        product = request.form.get("product")
+        year = int(request.form.get("year"))
+        month = int(request.form.get("month"))
+        qty = float(request.form.get("qty",0))
+
+        if not product or qty <= 0:
+            flash("Invalid product or quantity")
+            return redirect(url_for("target"))
+
+        month_name = f"{calendar.month_name[month]} {year}"
+
+        cur.execute("""
+            INSERT INTO targets (month, product, qty)
+            VALUES (?, ?, ?)
+            ON CONFLICT(month,product)
+            DO UPDATE SET qty=excluded.qty
+        """,(month_name, product, qty))
+        con.commit()
+
+    # ---------- AUTO CREATE CURRENT MONTH FROM SALES (IF NOT EXISTS) ----------
+    cur.execute("SELECT DISTINCT product FROM sales_log")
+    sold_products = [r[0] for r in cur.fetchall()]
+
+    for prod in sold_products:
+        cur.execute("""
+            SELECT 1 FROM targets
+            WHERE month=? AND product=?
+        """,(current_month,prod))
+        if cur.fetchone():
             continue
-        for month_dir in sorted(year_dir.iterdir(), reverse=True):
-            if not month_dir.is_dir():
-                continue
-            csv_files = list(month_dir.glob("Stock_Entry_*.csv"))
-            if not csv_files:
-                continue
-            csv_file = csv_files[0]
 
-            month_name = month_dir.name
-            year_name = year_dir.name
-            key = f"{month_name} {year_name}"
+        # sales based qty
+        cur.execute("""
+            SELECT SUM(qty)
+            FROM sales_log
+            WHERE product=?
+              AND strftime('%B %Y',date)=?
+        """,(prod,current_month))
+        s = cur.fetchone()[0] or 0
 
-            totals = {}
-            try:
-                with open(csv_file, "r", encoding="utf-8") as f:
-                    reader = csv.DictReader(f)
-                    for row in reader:
-                        prod = row.get("Product", "Unknown")
-                        try:
-                            qty = float(row.get("Quantity", 0))
-                        except:
-                            qty = 0.0
-                        totals[prod] = totals.get(prod, 0.0) + qty
-            except Exception as e:
-                totals = {"Error reading file": 0.0}
+        if s > 0:
+            cur.execute("""
+                INSERT INTO targets (month,product,qty)
+                VALUES (?,?,?)
+            """,(current_month,prod,s))
 
-            # صرف غیر خالی مہینے دکھائیں
-            if totals:
-                # سب سے زیادہ qty والے اوپر
-                sorted_totals = dict(sorted(totals.items(), key=lambda x: x[1], reverse=True))
-                all_months[key] = {
-                    "totals": sorted_totals,
-                    "file": csv_file.name
-                }
+    con.commit()
 
-    if not all_months:
-        flash("No stock entries found in any month yet.")
-        return redirect(url_for("stock_entry"))
+    # ---------- AUTO CREATE NEXT MONTH (LAST DAY ONLY) ----------
+    last_day = calendar.monthrange(today.year,today.month)[1]
+    if today.day == last_day:
 
+        next_month = (today.replace(day=28)+datetime.timedelta(days=4)).strftime("%B %Y")
+
+        cur.execute("SELECT product, qty FROM targets WHERE month=?",(current_month,))
+        for p,q in cur.fetchall():
+            new_qty = q + (q * growth / 100)
+
+            cur.execute("""
+                INSERT INTO targets (month,product,qty)
+                VALUES (?,?,?)
+                ON CONFLICT(month,product)
+                DO NOTHING
+            """,(next_month,p,new_qty))
+
+        con.commit()
+
+    # ---------- FETCH ALL TARGETS ----------
+    cur.execute("SELECT month, product, qty FROM targets")
+    targets = cur.fetchall()
+
+    # ---------- ACHIEVED FROM SALES ----------
+    cur.execute("""
+        SELECT product, SUM(qty)
+        FROM sales_log
+        WHERE strftime('%B %Y',date)=?
+        GROUP BY product
+    """,(current_month,))
+    achieved = {r[0]:r[1] for r in cur.fetchall()}
+
+    con.close()
+
+    # ---------- GROUP MONTHS ----------
+    months = {}
+    for m,p,q in targets:
+        if m not in months:
+            months[m]=[]
+        ach = achieved.get(p,0)
+        percent = (ach/q*100) if q>0 else 0
+        months[m].append({
+            "product":p,
+            "target":q,
+            "achieved":ach,
+            "percent":round(percent,1)
+        })
+
+    # ---------- SORT MONTHS ----------
+    months = dict(sorted(
+        months.items(),
+        key=lambda x: datetime.datetime.strptime(x[0],"%B %Y"),
+        reverse=True
+    ))
+
+    # ================= UI =================
     html = TPL_H + """
-<h2>📊 Monthly Stock Entry Summary</h2>
-<p class="small">Total quantity entered per product in each month</p>
+<h2>🎯 Monthly Targets</h2>
 
-<input type="text" id="globalSearch" placeholder="Search any product across all months..." 
-       style="width:100%;max-width:600px;padding:12px;font-size:16px;border-radius:10px;border:2px solid #1976d2;margin:20px 0;">
+<input id="search" placeholder="🔍 type product..."
+       style="width:100%;max-width:500px;padding:14px;border-radius:10px;
+              border:2px solid #1976d2;margin:15px 0;">
 
-{% for month_key, data in all_months.items() %}
-<div class="card" style="margin-bottom:30px;">
-  <h3 style="background:#1976d2;color:white;padding:12px;border-radius:8px 8px 0 0;margin:0;">
-    {{ month_key }} — {{ data.file }}
-  </h3>
-  <div style="padding:20px;">
-    <table style="width:100%;border-collapse:collapse;">
-      <thead style="background:#f5f5f5;">
-        <tr>
-          <th style="padding:12px;text-align:left;">Product Name</th>
-          <th style="padding:12px;text-align:center;width:180px;">Total Quantity</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for prod, qty in data.totals.items() %}
-        <tr class="search-row">
-          <td style="padding:12px;font-weight:600;">{{ prod }}</td>
-          <td style="padding:12px;text-align:center;font-weight:bold;font-size:18px;color:#1976d2;">
-            {{ "%.2f"|format(qty) }}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
+<form method="post" style="margin-bottom:25px;">
+  <select name="product">{% for p in products %}<option>{{p}}</option>{% endfor %}</select>
+  <select name="month">{% for m in range(1,13) %}<option value="{{m}}">{{calendar.month_name[m]}}</option>{% endfor %}</select>
+  <input name="year" type="number" value="{{today.year}}">
+  <input name="qty" type="number" step="any" placeholder="Target Qty">
+  <button class="btn">Save</button>
+</form>
+
+{% for month,rows in months.items() %}
+<div class="card" style="margin-bottom:20px;">
+  <button onclick="toggle('{{loop.index}}')"
+          style="width:100%;background:#1976d2;color:white;padding:14px;font-size:18px;">
+    {{month}}
+  </button>
+
+  <div id="m{{loop.index}}"
+       style="display:{% if month==current_month %}block{% else %}none{% endif %};padding:20px;">
+    <table style="width:100%">
+      <tr>
+        <th>#</th><th>Product</th><th>Target</th><th>Achieved</th><th>%</th><th></th>
+      </tr>
+      {% for r in rows %}
+      <tr class="row">
+        <td>{{loop.index}}</td>
+        <td>{{r.product}}</td>
+        <td>{{r.target}}</td>
+        <td>{{r.achieved}}</td>
+        <td style="font-weight:bold;
+          color:{{'#c62828' if r.percent<80 else '#ff9800' if r.percent<100 else '#2e7d32'}}">
+          {{r.percent}}%
+        </td>
+        <td>
+          <form method="post">
+            <input type="hidden" name="action" value="delete">
+            <input type="hidden" name="product_del" value="{{r.product}}">
+            <input type="hidden" name="month_del" value="{{month}}">
+            <button class="btn" style="background:#c62828">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
     </table>
   </div>
 </div>
 {% endfor %}
 
+<a href="{{url_for('home')}}" class="btn" style="margin-top:30px;">⬅ Back</a>
+
 <script>
-document.getElementById('globalSearch').addEventListener('keyup', function() {
-  let val = this.value.toLowerCase();
-  document.querySelectorAll('.search-row').forEach(row => {
-    let text = row.textContent.toLowerCase();
-    row.style.display = text.includes(val) ? '' : 'none';
-  });
-});
+document.getElementById("search").onkeyup=function(){
+ let v=this.value.toLowerCase();
+ document.querySelectorAll(".row").forEach(r=>{
+   r.style.display=r.innerText.toLowerCase().includes(v)?'':'none';
+ });
+}
+function toggle(i){
+ let e=document.getElementById("m"+i);
+ e.style.display=e.style.display=='none'?'block':'none';
+}
 </script>
-
-<p style="text-align:center;margin-top:40px;">
-  <a href="{{ url_for('stock_entry') }}" class="btn" style="padding:14px 40px;font-size:18px;">
-    ← Back to Stock Entry
-  </a>
-</p>
-""" + TPL_F
-
-    return render_template_string(html, all_months=all_months, project=get_setting("project_name"))
-# 5 PROFESSIONAL ENGLISH CARDS - FINAL VERSION
-# ========================================
-
-
-# 3. Monthly Targets (ٹھیک شدہ)
-# Replace the existing @app.route("/target") function with this updated version
-
-@app.route("/target", methods=["GET", "POST"])
-def target():
-    import calendar
-    prods = load_products()
-    growth = float(get_setting("growth_rate", "10"))
-
-    if request.method == "POST":
-        act = request.form.get("action", "")
-
-        if act == "delete":
-            product_del = request.form.get("product_del", "").strip()
-            month_del = request.form.get("month_del", "").strip()
-            if product_del and month_del:
-                targets = read_csv(TARGETS_CSV)
-                new_targets = [t for t in targets if not (t.get("product") == product_del and t.get("month") == month_del)]
-                write_csv(TARGETS_CSV, new_targets, ["month", "product", "qty"])
-            return redirect(url_for("target"))
-
-        # Save first month target
-        product = request.form.get("product")
-        year = int(request.form.get("year"))
-        month = int(request.form.get("month"))
-        base_qty = float(request.form.get("qty", 0))
-
-        if not product or base_qty <= 0:
-            flash("Invalid product or quantity")
-            return redirect(url_for("target"))
-
-        month_name = calendar.month_name[month] + f" {year}"
-
-        targets = read_csv(TARGETS_CSV)
-        found = False
-        for t in targets:
-            if t.get("month") == month_name and t.get("product") == product:
-                t["qty"] = f"{base_qty:.2f}"
-                found = True
-        if not found:
-            targets.append({
-                "month": month_name,
-                "product": product,
-                "qty": f"{base_qty:.2f}"
-            })
-        write_csv(TARGETS_CSV, targets, ["month", "product", "qty"])
-        flash(f"Target saved for {product} in {month_name}")
-
-    # ================= AUTO CREATE NEXT MONTH TARGET =================
-    today = datetime.date.today()
-    last_day = calendar.monthrange(today.year, today.month)[1]
-
-    if today.day == last_day:  # آج مہینے کا آخری دن ہے
-        current_month = today.strftime("%B %Y")
-        next_month_date = today.replace(day=28) + datetime.timedelta(days=4)  # اگلا مہینہ
-        next_month_name = next_month_date.strftime("%B %Y")
-
-        targets = read_csv(TARGETS_CSV)
-        updated = False
-        for t in targets:
-            if t.get("month") == current_month:
-                try:
-                    current_qty = float(t.get("qty", 0))
-                    new_qty = current_qty + (current_qty * growth / 100)
-                    # اگلا مہینہ چیک کریں، اگر نہیں تو بنائیں
-                    found_next = False
-                    for nt in targets:
-                        if nt.get("month") == next_month_name and nt.get("product") == t.get("product"):
-                            nt["qty"] = f"{new_qty:.2f}"
-                            found_next = True
-                    if not found_next:
-                        targets.append({
-                            "month": next_month_name,
-                            "product": t.get("product"),
-                            "qty": f"{new_qty:.2f}"
-                        })
-                    updated = True
-                except:
-                    pass
-        if updated:
-            write_csv(TARGETS_CSV, targets, ["month", "product", "qty"])
-
-    # ================= FETCH CURRENT MONTH TARGET + ACHIEVED (CSV سے) =================
-    current_month = today.strftime("%B %Y")
-
-    # تمام targets لوڈ کریں
-    targets = read_csv(TARGETS_CSV)
-    current_targets = {}
-    for t in targets:
-        if t.get("month") == current_month:
-            try:
-                current_targets[t.get("product")] = float(t.get("qty", 0))
-            except:
-                pass
-
-    # اب achieved quantity نکالیں (invoices + lines سے)
-    invoices = read_csv(INVOICES)
-    lines = read_csv(LINES)
-
-    achieved = {}
-    for line in lines:
-        inv_no = line.get("inv_no")
-        inv = next((i for i in invoices if i.get("inv_no") == inv_no), None)
-        if not inv:
-            continue
-        date_str = inv.get("date", "")
-        try:
-            if "-" in date_str:
-                parts = date_str.split("-")
-                if len(parts) == 3:
-                    if len(parts[2]) == 2:
-                        dt = datetime.datetime.strptime(date_str, "%d-%m-%y")
-                    else:
-                        dt = datetime.datetime.strptime(date_str, "%d-%m-%Y")
-            else:
-                continue
-            if dt.strftime("%B %Y") != current_month:
-                continue
-        except:
-            continue
-
-        prod = to_caps(line.get("product", ""))
-        try:
-            qty = float(line.get("qty", 0) or 0)
-        except:
-            qty = 0.0
-        if qty > 0:
-            achieved[prod] = achieved.get(prod, 0.0) + qty
-
-    # ڈیٹا تیار کریں
-    data = []
-    for prod_name, target_qty in current_targets.items():
-        ach = achieved.get(prod_name, 0.0)
-        percent = (ach / target_qty * 100) if target_qty > 0 else 0
-        data.append({
-            "product": prod_name,
-            "target": target_qty,
-            "achieved": ach,
-            "percent": round(percent, 1)
-        })
-
-    # اگر کوئی ٹارگٹ نہیں تو خالی دکھائیں
-    if not data:
-        data = []
-
-    html = TPL_H + """
-<h3>Monthly Target Sheet</h3>
-
-<form method="post" style="margin-bottom:30px;background:#f0f8ff;padding:20px;border-radius:12px;">
-  <div style="display:grid;grid-template-columns:1fr 120px 120px 150px 150px;gap:15px;align-items:end;">
-    <div>
-      <label><strong>Product</strong></label>
-      <select name="product" required style="width:100%;padding:10px;">
-        {% for p in prods %}
-          <option value="{{p.name}}">{{p.name}}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <div>
-      <label><strong>Month</strong></label>
-      <select name="month" required style="width:100%;padding:10px;">
-        {% for m in range(1,13) %}
-          <option value="{{m}}">{{ calendar.month_name[m] }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <div>
-      <label><strong>Year</strong></label>
-      <input type="number" name="year" value="{{ now.year }}" required style="width:100%;padding:10px;">
-    </div>
-    <div>
-      <label><strong>Target Qty</strong></label>
-      <input type="number" name="qty" step="any" placeholder="Target quantity" required style="width:100%;padding:10px;">
-    </div>
-    <div>
-      <button class="btn" style="padding:12px;background:#1976d2;color:white;">Save Target</button>
-    </div>
-  </div>
-</form>
-
-<div class="card">
-  <h3 style="background:#1976d2;color:white;padding:14px;margin:0;border-radius:8px 8px 0 0;">
-    Current Month Targets: {{ current_month }}
-  </h3>
-  <table style="width:100%;border-collapse:collapse;">
-    <thead style="background:#e3f2fd;">
-      <tr>
-        <th style="padding:12px;text-align:left;">Product</th>
-        <th style="padding:12px;text-align:center;">Target Qty</th>
-        <th style="padding:12px;text-align:center;">Achieved Qty</th>
-        <th style="padding:12px;text-align:center;">Achieved %</th>
-        <th style="padding:12px;text-align:center;">Action</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% if data %}
-        {% for row in data %}
-        <tr {% if row.percent < 80 %}style="background:#ffebee;"{% elif row.percent >= 100 %}style="background:#e8f5e9;"{% endif %}>
-          <td style="padding:12px;font-weight:600;">{{ row.product }}</td>
-          <td style="padding:12px;text-align:center;font-weight:bold;">{{ "%.2f"|format(row.target) }}</td>
-          <td style="padding:12px;text-align:center;font-weight:bold;color:#1976d2;">{{ "%.2f"|format(row.achieved) }}</td>
-          <td style="padding:12px;text-align:center;font-size:18px;font-weight:bold;
-               color:{{"#c62828" if row.percent < 80 else "#ff9800" if row.percent < 100 else "#2e7d32"}};">
-            {{ row.percent }} %
-          </td>
-          <td style="padding:12px;text-align:center;">
-            <form method="post" style="display:inline;">
-              <input type="hidden" name="action" value="delete">
-              <input type="hidden" name="product_del" value="{{ row.product }}">
-              <input type="hidden" name="month_del" value="{{ current_month }}">
-              <button class="btn" style="background:#c62828;color:white;padding:8px 16px;"
-                      onclick="return confirm('Delete target for {{ row.product }}?')">Delete</button>
-            </form>
-          </td>
-        </tr>
-        {% endfor %}
-      {% else %}
-        <tr>
-          <td colspan="5" style="text-align:center;padding:40px;color:#999;font-size:18px;">
-            اس مہینے کے لیے کوئی ٹارگٹ سیٹ نہیں کیا گیا
-          </td>
-        </tr>
-      {% endif %}
-    </tbody>
-  </table>
-</div>
-
-<p style="margin-top:20px;text-align:center;color:#666;">
-  اگلا مہینہ کا ٹارگٹ خود بخود {{ growth }}% گروتھ کے ساتھ بن جائے گا (مہینے کے آخری دن)
-</p>
 """ + TPL_F
 
     return render_template_string(
         html,
-        prods=prods,
-        data=data,
-        now=today,
+        products=products,
+        months=months,
+        today=today,
         current_month=current_month,
         calendar=calendar,
         growth=growth,
@@ -3622,188 +4455,214 @@ def target():
 @login_required
 def profit_loss():
     today = datetime.date.today()
-    current_month = today.strftime("%Y-%m")        # e.g. 2026-01
-    month_name = today.strftime("%B")
-    year = today.year
-    full_month_year = f"{month_name} {year}"
+    current_month = today.strftime("%Y-%m")
+    full_month_year = today.strftime("%B %Y")
 
-    # ==== Total Sales اس مہینے کی ====
-    total_sales = 0.0
-    invoices = read_csv(INVOICES)
-    for inv in invoices:
-        date_str = inv.get("date", "").strip()
-        if not date_str:
-            continue
-        try:
-            # مختلف فارمیٹس کو ہینڈل کریں
-            if len(date_str.split("-")[2]) == 4:  # YYYY-MM-DD
-                dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
-            elif len(date_str.split("-")[2]) == 2:  # dd-mm-yy یا dd-mm-yyyy
-                parts = date_str.split("-")
-                if len(parts) == 3:
-                    day, mon, yr = parts
-                    yr = "20" + yr if len(yr) == 2 else yr
-                    date_str_normalized = f"{yr}-{mon.zfill(2)}-{day.zfill(2)}"
-                    dt = datetime.datetime.strptime(date_str_normalized, "%Y-%m-%d")
-                else:
-                    continue
-            else:
-                continue
-        except:
-            continue
+    con = sqlite3.connect(DB_FILE)
+    cur = con.cursor()
 
-        if dt.strftime("%Y-%m") == current_month:
-            try:
-                total_sales += float(inv.get("total", "0") or 0)
-            except:
-                pass
+    # ================= TOTAL SALES (CURRENT MONTH) =================
+    cur.execute("""
+        SELECT SUM(total)
+        FROM invoices
+        WHERE substr(date,1,7)=?
+    """, (current_month,))
+    total_sales = cur.fetchone()[0] or 0.0
 
-    # ==== Total Expenses اس مہینے کی (CSV سے) ====
-    total_expenses = 0.0
-    try:
-        expenses_list = read_csv(EXPENSES_CSV)
-        for e in expenses_list:
-            exp_date = e.get("date", "").strip()
-            if not exp_date:
-                continue
-            try:
-                # تاریخ کو چیک کرو
-                dt = datetime.datetime.strptime(exp_date, "%Y-%m-%d")
-                if dt.strftime("%Y-%m") == current_month:
-                    amount = float(e.get("amount", 0) or 0)
-                    total_expenses += amount
-            except:
-                continue
-    except Exception as e:
-        print("Expenses CSV error:", e)
-        total_expenses = 0.0
+    # ================= TOTAL EXPENSES =================
+    cur.execute("""
+        SELECT SUM(amount)
+        FROM expenses
+        WHERE substr(date,1,7)=?
+    """, (current_month,))
+    total_expenses = cur.fetchone()[0] or 0.0
 
     net_profit = total_sales - total_expenses
 
-    # ==== Product-wise Gross Profit ====
-    products = load_products()
-    sales_qty = {}
+    # ================= CURRENT MONTH PRODUCT QTY =================
+    cur.execute("""
+        SELECT product, SUM(qty)
+        FROM sales_log
+        WHERE substr(date,1,7)=?
+        GROUP BY product
+    """, (current_month,))
+    sales_qty = {r[0]: r[1] for r in cur.fetchall()}
 
-    # اس مہینے کی تمام invoice lines جمع کریں
-    for inv in invoices:
-        date_str = inv.get("date", "").strip()
-        if not date_str:
-            continue
-        try:
-            # وہی تاریخ چیک
-            if len(date_str.split("-")[2]) == 4:
-                dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
-            else:
-                parts = date_str.split("-")
-                if len(parts) != 3:
-                    continue
-                day, mon, yr = parts
-                yr = "20" + yr if len(yr) == 2 else yr
-                dt = datetime.datetime.strptime(f"{yr}-{mon.zfill(2)}-{day.zfill(2)}", "%Y-%m-%d")
-        except:
-            continue
+    # ================= PRODUCTS =================
+    cur.execute("SELECT name, unit_price, purchase_price FROM products")
+    products = cur.fetchall()
 
-        if dt.strftime("%Y-%m") != current_month:
-            continue
-
-        inv_no = inv.get("inv_no")
-        if not inv_no:
-            continue
-
-        for line in read_csv(LINES):
-            if line.get("inv_no") == inv_no:
-                prod = to_caps(line.get("product", ""))
-                try:
-                    qty = float(line.get("qty", 0) or 0)
-                except:
-                    qty = 0.0
-                if qty > 0:
-                    sales_qty[prod] = sales_qty.get(prod, 0.0) + qty
-
-    # پروڈکٹ وائز رپورٹ تیار کریں
     rows = []
     total_gross_profit = 0.0
-    for p in products:
-        name = p["name"]
-        sp = p["unit_price"]
-        cp = p["purchase_price"]
-        qty_sold = sales_qty.get(name, 0.0)
-        gross = (sp - cp) * qty_sold
+    for name, sp, cp in products:
+        qty = sales_qty.get(name, 0.0)
+        gross = (sp - cp) * qty
         total_gross_profit += gross
-        profit_pct = round((gross / (cp * qty_sold) * 100), 1) if cp > 0 and qty_sold > 0 else 0.0
-
+        pct = (gross / (cp * qty) * 100) if cp > 0 and qty > 0 else 0
         rows.append({
             "product": name,
-            "qty": qty_sold,
+            "qty": qty,
             "selling_price": sp,
             "cost_price": cp,
             "gross_profit": gross,
-            "percent": profit_pct
+            "percent": round(pct, 1)
         })
 
     rows.sort(key=lambda x: x["qty"], reverse=True)
 
-    # HTML (کوئی تبدیلی نہیں، بس درست ڈیٹا پاس ہو گا)
-    html = TPL_H + """
-<h2>Profit & Loss – {{ full_month_year }}</h2>
+    # ================= MONTHLY SALES (ALL MONTHS) =================
+    cur.execute("""
+        SELECT substr(date,1,7), SUM(total)
+        FROM invoices
+        GROUP BY substr(date,1,7)
+        ORDER BY substr(date,1,7)
+    """)
+    monthly_sales = cur.fetchall()
 
-<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px,1fr)); gap:20px; margin:30px 0;">
-  <div class="card" style="text-align:center;padding:25px;background:#e3f2fd;border-left:6px solid #1976d2;">
-    <h3>Total Sales (This Month)</h3>
-    <p style="font-size:32px;font-weight:bold;color:#1976d2;">Rs {{ "%.2f"|format(total_sales) }}</p>
+    # ================= MONTHLY GROSS PROFIT (ALL MONTHS) =================
+    cur.execute("""
+        SELECT substr(s.date,1,7) ym,
+               SUM((p.unit_price - p.purchase_price) * s.qty)
+        FROM sales_log s
+        JOIN products p ON p.name = s.product
+        GROUP BY ym
+        ORDER BY ym
+    """)
+    monthly_gross = cur.fetchall()
+
+    con.close()
+
+    # ================= UI =================
+    html = TPL_H + """
+<style>
+  @media (max-width: 600px) {
+    table { font-size: 14px; }
+    th, td { padding: 8px 5px; }
+    summary { font-size: 16px !important; }
+    .card { padding: 15px; }
+  }
+</style>
+
+<h2>📊 Profit & Loss – {{ full_month_year }}</h2>
+
+<!-- ===== SUMMARY ===== -->
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:20px;margin:30px 0;">
+  <div class="card" style="background:#e3f2fd;border-left:6px solid #1976d2;">
+    <h3>Total Sales</h3>
+    <p style="font-size:30px;font-weight:bold;">Rs {{ "%.2f"|format(total_sales) }}</p>
   </div>
-  <div class="card" style="text-align:center;padding:25px;background:#fff3e0;border-left:6px solid #ff9800;">
+  <div class="card" style="background:#fff3e0;border-left:6px solid #ff9800;">
     <h3>Gross Profit</h3>
-    <p style="font-size:32px;font-weight:bold;color:#ff9800;">Rs {{ "%.2f"|format(total_gross_profit) }}</p>
+    <p style="font-size:30px;font-weight:bold;">Rs {{ "%.2f"|format(total_gross_profit) }}</p>
   </div>
-  <div class="card" style="text-align:center;padding:25px;background:#ffebee;border-left:6px solid #f44336;">
+  <div class="card" style="background:#ffebee;border-left:6px solid #f44336;">
     <h3>Total Expenses</h3>
-    <p style="font-size:32px;font-weight:bold;color:#f44336;">Rs {{ "%.2f"|format(total_expenses) }}</p>
+    <p style="font-size:30px;font-weight:bold;">Rs {{ "%.2f"|format(total_expenses) }}</p>
   </div>
-  <div class="card" style="text-align:center;padding:25px;background:{{'#e8f5e9' if net_profit>=0 else '#ffebee'}};border-left:6px solid {{'#4caf50' if net_profit>=0 else '#f44336'}};">
+  <div class="card" style="background:{{ '#e8f5e9' if net_profit>=0 else '#ffebee' }};">
     <h3>Net {{ "Profit" if net_profit>=0 else "Loss" }}</h3>
-    <p style="font-size:36px;font-weight:bold;color:{{'#2e7d32' if net_profit>=0 else '#c62828'}};">
+    <p style="font-size:34px;font-weight:bold;">
       Rs {{ "%.2f"|format(net_profit|abs) }}
     </p>
   </div>
 </div>
 
-<h3 style="margin-top:40px;">Product-wise Report – {{ full_month_year }}</h3>
-<table style="width:100%;border-collapse:collapse;">
-  <thead style="background:#1976d2;color:white;">
-    <tr>
-      <th style="padding:12px;text-align:left;">Product Name</th>
-      <th style="padding:12px;text-align:center;">Qty Sold</th>
-      <th style="padding:12px;text-align:center;">Selling Price</th>
-      <th style="padding:12px;text-align:center;">Cost Price</th>
-      <th style="padding:12px;text-align:center;">Gross Profit</th>
-      <th style="padding:12px;text-align:center;">Profit %</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for r in rows %}
-    <tr {% if r.qty > 0 %}style="background:#fffde7;"{% endif %}>
-      <td style="padding:10px;font-weight:600;">{{ r.product }}</td>
-      <td style="padding:10px;text-align:center;font-weight:bold;color:{{"green" if r.qty>0 else "#999"}};">
-        {{ "%.2f"|format(r.qty) }}
-      </td>
-      <td style="padding:10px;text-align:center;">Rs {{ "%.2f"|format(r.selling_price) }}</td>
-      <td style="padding:10px;text-align:center;">Rs {{ "%.2f"|format(r.cost_price) }}</td>
-      <td style="padding:10px;text-align:center;font-weight:bold;color:{{"#2e7d32" if r.gross_profit>0 else "#c62828"}};">
-        Rs {{ "%.2f"|format(r.gross_profit) }}
-      </td>
-      <td style="padding:10px;text-align:center;font-weight:bold;color:{{"#2e7d32" if r.percent>=20 else "#c62828"}};">
-        {{ r.percent }}%
-      </td>
-    </tr>
-    {% endfor %}
-    {% if not rows %}
-    <tr><td colspan="6" style="text-align:center;padding:40px;color:#999;">
-      اس مہینے کوئی سیل نہیں ہوئی
-    </td></tr>
-    {% endif %}
-  </tbody>
-</table>
+<a href="{{ url_for('home') }}" class="btn" style="margin-top:30px;">⬅ Back</a>
+
+<!-- ===== GRAPH BUTTON ===== -->
+<button class="btn" onclick="openGraph()" style="margin-bottom:25px;">
+  📈 View Monthly Graph
+</button>
+
+<!-- ===== GRAPH MODAL ===== -->
+<div id="graphModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:999;">
+  <div style="background:white;max-width:900px;margin:40px auto;padding:25px;border-radius:14px;">
+    <h3 style="margin-top:0;">Monthly Analysis</h3>
+    <div style="margin-bottom:15px;">
+      <button class="btn" onclick="showSales()">Total Sales</button>
+      <button class="btn" onclick="showGross()">Gross Profit</button>
+      <button class="btn" onclick="closeGraph()" style="float:right;background:#c62828;">
+        ✖ Close
+      </button>
+    </div>
+    <canvas id="chart"></canvas>
+  </div>
+</div>
+
+<!-- ===== FILTER ===== -->
+<input id="search" placeholder="🔍 type product name..."
+       style="width:100%;max-width:500px;padding:14px;border-radius:10px;
+              border:2px solid #1976d2;margin:20px 0;">
+
+<!-- ===== PRODUCT REPORT ===== -->
+<details open>
+  <summary style="font-size:18px;font-weight:bold;cursor:pointer;">
+    📦 Product-wise Gross Profit – {{ full_month_year }}
+  </summary>
+  <table style="width:100%;margin-top:15px;">
+    <thead style="background:#1976d2;color:white;">
+      <tr>
+        <th>Product</th>
+        <th>Qty</th>
+        <th>SP</th>
+        <th>CP</th>
+        <th>Gross</th>
+        <th>%</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr class="row">
+        <td>{{ r.product }}</td>
+        <td>{{ "%.2f"|format(r.qty) }}</td>
+        <td>{{ "%.2f"|format(r.selling_price) }}</td>
+        <td>{{ "%.2f"|format(r.cost_price) }}</td>
+        <td style="font-weight:bold;color:{{ '#2e7d32' if r.gross_profit >= 0 else '#c62828' }};">
+          {{ "%.2f"|format(r.gross_profit) }}
+        </td>
+        <td>{{ r.percent }}%</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</details>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+const labels = {{ monthly_sales|map(attribute=0)|list|tojson }};
+const salesData = {{ monthly_sales|map(attribute=1)|list|tojson }};
+const grossData = {{ monthly_gross|map(attribute=1)|list|tojson }};
+
+let chart;
+
+function openGraph(){
+  document.getElementById("graphModal").style.display="block";
+  showSales();
+}
+
+function closeGraph(){
+  document.getElementById("graphModal").style.display="none";
+}
+
+function render(data, label, color){
+  if(chart) chart.destroy();
+  chart = new Chart(document.getElementById("chart"), {
+    type: "line",
+    data: { labels: labels, datasets: [{ label: label, data: data, borderColor: color, fill: false }] }
+  });
+}
+
+function showSales(){ render(salesData, "Monthly Sales", "#1976d2"); }
+function showGross(){ render(grossData, "Monthly Gross Profit", "#2e7d32"); }
+
+// product name filter
+document.getElementById("search").onkeyup = function(){
+  let v = this.value.toLowerCase();
+  document.querySelectorAll(".row").forEach(r => {
+    r.style.display = r.innerText.toLowerCase().includes(v) ? '' : 'none';
+  });
+}
+</script>
 """ + TPL_F
 
     return render_template_string(
@@ -3813,191 +4672,177 @@ def profit_loss():
         total_gross_profit=total_gross_profit,
         net_profit=net_profit,
         rows=rows,
+        monthly_sales=monthly_sales,
+        monthly_gross=monthly_gross,
         full_month_year=full_month_year,
         project=get_setting("project_name")
     )
+
 # 5. Expenses Sheet
 # 5. Expenses Sheet - مکمل درست اور چلنے والا
 @app.route("/expenses", methods=["GET", "POST"])
 @login_required
 def expenses():
+
     today = datetime.date.today()
     today_str = today.isoformat()
     current_year = today.year
 
+    con = sqlite3.connect(DB_FILE)
+    cur = con.cursor()
+
+    # ================= POST =================
     if request.method == "POST":
-        action = request.form.get("action")
-        
+        action = request.form.get("action","")
+
+        # DELETE
         if action == "delete":
             exp_id = request.form.get("exp_id")
             if exp_id:
-                expenses_list = read_csv(EXPENSES_CSV)
-                new_list = [e for e in expenses_list if e.get("id") != exp_id]
-                write_csv(EXPENSES_CSV, new_list, ["id", "date", "amount", "description"])
+                cur.execute("DELETE FROM expenses WHERE id=?", (exp_id,))
+                con.commit()
                 flash("Expense deleted successfully")
+            con.close()
             return redirect(url_for("expenses"))
 
-        # Add new expense
+        # ADD
         try:
-            amount = float(request.form.get("amount", 0))
-            desc = request.form.get("desc", "").strip()
+            amount = float(request.form.get("amount",0))
+            desc = request.form.get("desc","").strip()
             date = request.form.get("date", today_str)
-            if amount > 0 and desc:
-                expenses_list = read_csv(EXPENSES_CSV)
-                # نیا ID بنائیں
-                new_id = str(max([int(e.get("id", 0) or 0) for e in expenses_list] + [0]) + 1)
-                expenses_list.append({
-                    "id": new_id,
-                    "date": date,
-                    "amount": f"{amount:.2f}",
-                    "description": desc
-                })
-                write_csv(EXPENSES_CSV, expenses_list, ["id", "date", "amount", "description"])
-                flash(f"Added: Rs {amount:,.2f} - {desc}")
+
+            if amount>0 and desc:
+                cur.execute("""
+                    INSERT INTO expenses (date, amount, description)
+                    VALUES (?,?,?)
+                """,(date,amount,desc))
+                con.commit()
+                flash(f"Added: Rs {amount:,.2f} – {desc}")
             else:
                 flash("Please enter valid amount and description")
         except:
             flash("Invalid amount")
+
+        con.close()
         return redirect(url_for("expenses"))
 
-    # GET: تمام اخراجات لوڈ کریں
-    all_exps = read_csv(EXPENSES_CSV)
-    # اگر کوئی انٹری نہیں تو خالی لسٹ
-    if not all_exps:
-        all_exps = []
+    # ================= GET =================
+    cur.execute("SELECT id,date,amount,description FROM expenses ORDER BY date DESC")
+    rows = cur.fetchall()
+    con.close()
 
-    # تاریخ کے لحاظ سے سارٹ کریں (نیا سے پرانا)
-    try:
-        all_exps.sort(key=lambda x: x.get("date", ""), reverse=True)
-    except:
-        pass
-
-    # مہینہ وار گروپ کریں
     from collections import defaultdict
     monthly = defaultdict(list)
     monthly_totals = defaultdict(float)
     yearly_total = 0.0
 
-    for e in all_exps:
+    for i,d,a,desc in rows:
         try:
-            exp_date = e.get("date", "")
-            amount = float(e.get("amount", 0) or 0)
-            desc = e.get("description", "—")
-            exp_id = e.get("id", "")
-
-            # مہینہ کا نام بنائیں
-            dt = datetime.datetime.strptime(exp_date, "%Y-%m-%d")
+            dt = datetime.datetime.strptime(d,"%Y-%m-%d")
             month_key = dt.strftime("%B %Y")
-
             monthly[month_key].append({
-                "id": exp_id,
-                "date": exp_date,
-                "amount": amount,
-                "desc": desc
+                "id":i,
+                "date":d,
+                "amount":a,
+                "desc":desc
             })
-            monthly_totals[month_key] += amount
-            yearly_total += amount
+            monthly_totals[month_key]+=a
+            if dt.year==current_year:
+                yearly_total+=a
         except:
             continue
 
-    # مہینوں کو نیا سے پرانا سارٹ کریں
-    sorted_months = sorted(monthly.keys(), key=lambda x: datetime.datetime.strptime(x, "%B %Y"), reverse=True)
+    sorted_months = sorted(
+        monthly.keys(),
+        key=lambda x: datetime.datetime.strptime(x,"%B %Y"),
+        reverse=True
+    )
 
+    # ================= UI =================
     html = TPL_H + """
-<h2>Expense Manager</h2>
-{% with messages = get_flashed_messages() %}
-  {% if messages %}
-    {% for msg in messages %}
-      <div class="notice">{{ msg }}</div>
-    {% endfor %}
-  {% endif %}
+<h2>💸 Expense Manager</h2>
+<a href="{{url_for('home')}}" class="btn" style="margin-top:30px;">⬅ Back</a>
+{% with messages=get_flashed_messages() %}
+{% for m in messages %}
+<div class="notice">{{m}}</div>
+{% endfor %}
 {% endwith %}
 
-<form method="post" style="background:#f9f9f9;padding:20px;border-radius:10px;margin:20px 0;box-shadow:0 4px 10px rgba(0,0,0,0.1);">
-  <div style="display:grid;grid-template-columns:200px 150px 1fr 120px;gap:15px;align-items:end;">
-    <div>
-      <label><strong>Date</strong></label>
-      <input name="date" type="date" value="{{ today_str }}" required style="width:100%;padding:10px;">
-    </div>
-    <div>
-      <label><strong>Amount</strong></label>
-      <input name="amount" type="number" step="0.01" placeholder="0.00" required style="width:100%;padding:10px;">
-    </div>
-    <div>
-      <label><strong>Description</strong></label>
-      <input name="desc" placeholder="e.g. Electricity bill, Rent, etc." required style="width:100%;padding:10px;">
-    </div>
-    <div>
-      <button class="btn" style="padding:12px 20px;font-size:16px;background:#d32f2f;color:white;">Add Expense</button>
-    </div>
+<!-- ===== ADD EXPENSE ===== -->
+<form method="post" style="background:#f9f9f9;padding:20px;border-radius:12px;margin:20px 0;">
+  <div style="display:grid;grid-template-columns:180px 150px 1fr 140px;gap:15px;">
+    <input type="date" name="date" value="{{today_str}}" required>
+    <input type="number" name="amount" step="0.01" placeholder="Amount" required>
+    <input name="desc" placeholder="Description" required>
+    <button class="btn" style="background:#d32f2f;">Add Expense</button>
   </div>
 </form>
 
-<!-- Yearly Total -->
-<div class="card" style="text-align:center;padding:20px;background:#fff3e0;border-left:6px solid #ff9800;margin:20px 0;">
-  <h3>Yearly Total Expenses ({{ current_year }})</h3>
-  <p style="font-size:36px;font-weight:bold;color:#ff9800;margin:10px 0;">
-    Rs {{ "%.2f"|format(yearly_total) }}
-  </p>
+<!-- ===== YEAR TOTAL ===== -->
+<div class="card" style="text-align:center;background:#fff3e0;border-left:6px solid #ff9800;">
+  <h3>Yearly Expenses – {{current_year}}</h3>
+  <p style="font-size:32px;font-weight:bold;">Rs {{ "%.2f"|format(yearly_total) }}</p>
 </div>
 
-<!-- Monthly Sections -->
-<div style="margin-top:30px;">
-  {% if sorted_months %}
-    {% for month in sorted_months %}
-    <div class="card" style="margin-bottom:20px;border-radius:12px;overflow:hidden;box-shadow:0 4px 12px rgba(0,0,0,0.08);">
-      <div style="background:#d32f2f;color:white;padding:16px;cursor:pointer;font-size:18px;font-weight:bold;" 
-           onclick="let body=this.nextElementSibling; body.style.display=(body.style.display==='none' || body.style.display==='') ? 'block' : 'none';">
-        {{ month }} 
-        <span style="float:right;">
-          Total: Rs {{ "%.2f"|format(monthly_totals[month]) }}
-          <i style="margin-left:10px;">▼</i>
-        </span>
-      </div>
-      <div class="month-body" style="display:block;">
-        <table style="width:100%;border-collapse:collapse;">
-          <thead style="background:#ffebee;">
-            <tr>
-              <th style="padding:12px;text-align:left;">Date</th>
-              <th style="padding:12px;text-align:right;">Amount</th>
-              <th style="padding:12px;text-align:left;">Description</th>
-              <th style="padding:12px;text-align:center;">Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for e in monthly[month] %}
-            <tr style="border-bottom:1px solid #eee;">
-              <td style="padding:12px;">{{ e.date }}</td>
-              <td style="padding:12px;text-align:right;font-weight:bold;color:#d32f2f;">
-                Rs {{ "%.2f"|format(e.amount) }}
-              </td>
-              <td style="padding:12px;">{{ e.desc }}</td>
-              <td style="padding:12px;text-align:center;">
-                <form method="post" style="display:inline;" onsubmit="return confirm('Delete this expense?')">
-                  <input type="hidden" name="action" value="delete">
-                  <input type="hidden" name="exp_id" value="{{ e.id }}">
-                  <button class="btn" style="background:#c62828;padding:8px 16px;font-size:14px;">Delete</button>
-                </form>
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
-    {% endfor %}
-  {% else %}
-    <div class="card" style="text-align:center;padding:60px;color:#999;background:#f9f9f9;">
-      <h3>No expenses recorded yet</h3>
-      <p>Start adding expenses using the form above.</p>
-    </div>
-  {% endif %}
+<!-- ===== FILTER ===== -->
+<input id="search" placeholder="🔍 search expense..."
+       style="width:100%;max-width:500px;padding:14px;border-radius:10px;
+              border:2px solid #d32f2f;margin:25px 0;">
+
+<!-- ===== MONTHLY ===== -->
+{% for month in sorted_months %}
+<div class="card" style="margin-bottom:20px;">
+  <button onclick="toggle('{{loop.index}}')"
+          style="width:100%;background:#d32f2f;color:white;
+                 padding:16px;font-size:18px;text-align:left;">
+    {{month}}
+    <span style="float:right;">
+      Rs {{ "%.2f"|format(monthly_totals[month]) }} ▼
+    </span>
+  </button>
+
+  <div id="m{{loop.index}}"
+       style="display:{% if loop.first %}block{% else %}none{% endif %};padding:20px;">
+    <table style="width:100%;">
+      <tr>
+        <th>Date</th><th>Amount</th><th>Description</th><th></th>
+      </tr>
+      {% for e in monthly[month] %}
+      <tr class="row">
+        <td>{{e.date}}</td>
+        <td style="font-weight:bold;color:#d32f2f;">
+          Rs {{ "%.2f"|format(e.amount) }}
+        </td>
+        <td>{{e.desc}}</td>
+        <td>
+          <form method="post" onsubmit="return confirm('Delete this expense?')">
+            <input type="hidden" name="action" value="delete">
+            <input type="hidden" name="exp_id" value="{{e.id}}">
+            <button class="btn" style="background:#c62828;">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
 </div>
+{% endfor %}
+
+
 
 <script>
-  // پہلا مہینہ کھلا رکھیں
-  const firstBody = document.querySelector('.month-body');
-  if (firstBody) firstBody.style.display = 'block';
+// filter
+document.getElementById("search").onkeyup=function(){
+ let v=this.value.toLowerCase();
+ document.querySelectorAll(".row").forEach(r=>{
+   r.style.display=r.innerText.toLowerCase().includes(v)?'':'none';
+ });
+}
+// fold
+function toggle(i){
+ let e=document.getElementById("m"+i);
+ e.style.display=e.style.display=='none'?'block':'none';
+}
 </script>
 """ + TPL_F
 
@@ -4014,191 +4859,206 @@ def expenses():
 
 
 
+
 # ================== Other Expenses (نیا صفحہ – Name, Amount, Description) ==================
 @app.route("/other_expenses", methods=["GET", "POST"])
+@login_required
 def other_expenses():
+
     today = datetime.date.today()
     today_str = today.isoformat()
     current_year = today.year
 
-    OTHER_EXPENSES_CSV = DATA / "other_expenses.csv"
+    con = sqlite3.connect(DB_FILE)
+    cur = con.cursor()
 
-    # اگر فائل نہیں تو بنائیں
-    if not OTHER_EXPENSES_CSV.exists():
-        with open(OTHER_EXPENSES_CSV, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(["id", "date", "name", "amount", "description"])
+    # ---------- ENSURE TABLE ----------
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS other_expenses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT,
+            name TEXT,
+            amount REAL,
+            description TEXT
+        )
+    """)
+    con.commit()
 
+    # ---------- POST ----------
     if request.method == "POST":
-        action = request.form.get("action")
+        action = request.form.get("action","")
 
+        # DELETE
         if action == "delete":
             exp_id = request.form.get("exp_id")
             if exp_id:
-                entries = read_csv(OTHER_EXPENSES_CSV)
-                new_entries = [e for e in entries if e["id"] != exp_id]
-                write_csv(OTHER_EXPENSES_CSV, new_entries, ["id", "date", "name", "amount", "description"])
-                flash("Entry deleted successfully")
+                cur.execute("DELETE FROM other_expenses WHERE id=?", (exp_id,))
+                con.commit()
+                flash("Entry deleted")
+            con.close()
             return redirect(url_for("other_expenses"))
 
-        # Add new entry
+        # ADD ENTRY (NO REQUIRED FIELDS)
         try:
-            name = request.form.get("name", "").strip()
-            amount_str = request.form.get("amount", "").strip()
-            desc = request.form.get("desc", "").strip()
-            date = request.form.get("date", today_str)
+            name = request.form.get("name","").strip()
+            desc = request.form.get("desc","").strip()
+            date = request.form.get("date") or today_str
+            amount_str = request.form.get("amount","").strip()
+            amount = float(amount_str) if amount_str else 0.0
 
-            if not name or not amount_str:
-                flash("Name and Amount are required")
-                return redirect(url_for("other_expenses"))
-
-            amount = float(amount_str)
-            if amount <= 0:
-                flash("Amount must be greater than zero")
-                return redirect(url_for("other_expenses"))
-
-            # نیا ID بنائیں
-            entries = read_csv(OTHER_EXPENSES_CSV)
-            new_id = str(max([int(e.get("id", "0") or "0") for e in entries] or [0]) + 1)
-
-            entries.insert(0, {
-                "id": new_id,
-                "date": date,
-                "name": name,
-                "amount": f"{amount:.2f}",
-                "description": desc
-            })
-
-            write_csv(OTHER_EXPENSES_CSV, entries, ["id", "date", "name", "amount", "description"])
-            flash(f"Added: {name} – Rs {amount:,.2f}")
-        except ValueError:
-            flash("Invalid amount entered")
-        except Exception as e:
+            cur.execute("""
+                INSERT INTO other_expenses (date, name, amount, description)
+                VALUES (?,?,?,?)
+            """,(date,name,amount,desc))
+            con.commit()
+            flash("Entry added")
+        except:
             flash("Error saving entry")
+
+        con.close()
         return redirect(url_for("other_expenses"))
 
-    # GET – تمام انٹریز لوڈ کریں
-    all_entries = read_csv(OTHER_EXPENSES_CSV)
+    # ---------- GET ----------
+    cur.execute("""
+        SELECT id,date,name,amount,description
+        FROM other_expenses
+        ORDER BY date DESC, id DESC
+    """)
+    rows = cur.fetchall()
+    con.close()
 
-    # مہینے کے حساب سے گروپ کریں
     from collections import defaultdict
     monthly = defaultdict(list)
     monthly_totals = defaultdict(float)
+    yearly_total = 0.0
 
-    for e in all_entries:
+    for i,d,n,a,desc in rows:
         try:
-            exp_date = datetime.datetime.strptime(e["date"], "%Y-%m-%d")
-            month_key = exp_date.strftime("%B %Y")  # e.g., January 2026
-            monthly[month_key].append(e)
-            monthly_totals[month_key] += float(e.get("amount", 0) or 0)
+            dt = datetime.datetime.strptime(d,"%Y-%m-%d")
+            month_key = dt.strftime("%B %Y")
         except:
-            continue
+            month_key = "Unknown"
 
-    # نیا سے پرانے کی طرف ترتیب دیں
-    sorted_months = sorted(monthly.keys(),
-                           key=lambda x: datetime.datetime.strptime(x, "%B %Y"),
-                           reverse=True)
+        monthly[month_key].append({
+            "id":i,
+            "date":d or "—",
+            "name":n or "—",
+            "amount":a or 0,
+            "description":desc or ""
+        })
+        monthly_totals[month_key] += a or 0
+        if d and d.startswith(str(current_year)):
+            yearly_total += a or 0
 
+    sorted_months = sorted(
+        monthly.keys(),
+        key=lambda x: datetime.datetime.strptime(x,"%B %Y") if x!="Unknown" else datetime.datetime.min,
+        reverse=True
+    )
+
+    # ---------- UI ----------
     html = TPL_H + """
-<h2>📑 Other Expenses / Miscellaneous Entries</h2>
+<!-- BACK BUTTON (TOP) -->
+<a href="{{ url_for('home') }}" class="btn" style="margin-bottom:18px;">⬅ Back</a>
 
-<form method="post" style="background:#fff8e1;padding:25px;border-radius:12px;margin:25px 0;
-     border:2px dashed #ff9800;box-shadow:0 6px 15px rgba(0,0,0,0.1);">
-  <div style="display:grid;grid-template-columns:180px 150px 1fr 130px;gap:18px;align-items:end;">
-    <div>
-      <label><strong>Date</strong></label>
-      <input name="date" type="date" value="{{ today_str }}" required style="width:100%;padding:12px;font-size:15px;">
-    </div>
-    <div>
-      <label><strong>Name / Item</strong></label>
-      <input name="name" placeholder="e.g. Transport, Marketing" required style="width:100%;padding:12px;font-size:15px;">
-    </div>
-    <div>
-      <label><strong>Description</strong></label>
-      <input name="desc" placeholder="Optional details" style="width:100%;padding:12px;font-size:15px;">
-    </div>
-    <div style="display:flex;gap:10px;align-items:end;">
-      <div style="flex:1;">
-        <label><strong>Amount</strong></label>
-        <input name="amount" type="number" step="0.01" placeholder="0.00" required style="width:100%;padding:12px;font-size:15px;">
-      </div>
-      <button class="btn" style="padding:14px 20px;font-size:18px;background:#ff6d00;color:white;height:52px;">
-        Add Entry
-      </button>
-    </div>
+<h2>📑 Other Expenses</h2>
+
+<!-- ================= FORM ================= -->
+<form method="post" id="expenseForm"
+      style="background:#fff8e1;padding:22px;border-radius:12px;margin:20px 0;">
+
+  <div style="display:grid;grid-template-columns:160px 180px 1fr 140px;gap:15px;">
+    <input type="date" name="date" value="{{ today_str }}">
+    <input name="name" placeholder="Name / Item">
+    <input name="desc" placeholder="Description (optional)">
+    <input name="amount" type="number" step="0.01" placeholder="Amount">
   </div>
+
+  <button class="btn" style="margin-top:15px;background:#ff6d00;">
+    Add Entry
+  </button>
 </form>
 
-<!-- Yearly Total Card -->
-{% set yearly_total = monthly_totals.values() | map('float') | sum %}
-<div class="card" style="text-align:center;padding:25px;background:#fff0e0;border-left:8px solid #ff6d00;margin:30px 0;">
-  <h3>Yearly Total ({{ current_year }})</h3>
-  <p style="font-size:38px;font-weight:bold;color:#d84315;margin:10px 0;">
+<!-- YEARLY TOTAL -->
+<div class="card" style="text-align:center;background:#fff0e0;border-left:8px solid #ff6d00;margin:25px 0;">
+  <h3>Yearly Total – {{ current_year }}</h3>
+  <p style="font-size:32px;font-weight:bold;">
     Rs {{ "%.2f"|format(yearly_total) }}
   </p>
 </div>
 
-<!-- Monthly Foldable Sections -->
-<div style="margin-top:20px;">
-  {% if sorted_months %}
-    {% for month in sorted_months %}
-    <div class="card" style="margin-bottom:22px;border-radius:14px;overflow:hidden;
-         box-shadow:0 6px 16px rgba(0,0,0,0.1);border:1px solid #eee;">
-      <div style="background:#ff6d00;color:white;padding:18px;cursor:pointer;font-size:19px;font-weight:bold;"
-           onclick="this.nextElementSibling.style.display = (this.nextElementSibling.style.display === 'none' || this.nextElementSibling.style.display === '') ? 'block' : 'none';">
-        {{ month }}
-        <span style="float:right;">
-          Total: Rs {{ "%.2f"|format(monthly_totals[month]) }}
-          <i style="margin-left:12px;font-style:normal;">▼</i>
+<!-- MONTHLY FOLDABLE -->
+{% for month in sorted_months %}
+<div class="card" style="margin-bottom:18px;border-radius:14px;overflow:hidden;">
+  <button onclick="toggle('{{loop.index}}')"
+          style="width:100%;background:#ff6d00;color:white;padding:16px;font-size:18px;text-align:left;">
+    {{ month }}
+    <span style="float:right;">Rs {{ "%.2f"|format(monthly_totals[month]) }} ▼</span>
+  </button>
+
+  <div id="m{{loop.index}}" style="display:{% if loop.first %}block{% else %}none{% endif %};padding:15px;">
+    {% for e in monthly[month] %}
+    <div style="border-bottom:1px solid #eee;padding:12px 0;">
+
+      <!-- SINGLE LINE -->
+      <div style="display:flex;flex-wrap:wrap;gap:15px;align-items:center;">
+        <strong>{{ e.name }}</strong>
+        <span style="color:#666;">{{ e.date }}</span>
+        <span style="font-weight:bold;color:#d84315;">
+          Rs {{ "%.2f"|format(e.amount) }}
         </span>
+
+        <form method="post" style="margin-left:auto;" onsubmit="return confirm('Delete this entry?')">
+          <input type="hidden" name="action" value="delete">
+          <input type="hidden" name="exp_id" value="{{ e.id }}">
+          <button class="btn" style="background:#c62828;padding:6px 14px;">Delete</button>
+        </form>
       </div>
-      <div class="month-body" style="display:block;">
-        <table style="width:100%;border-collapse:collapse;">
-          <thead style="background:#fff3e0;">
-            <tr>
-              <th style="padding:14px;text-align:left;width:120px;">Date</th>
-              <th style="padding:14px;text-align:left;">Name / Item</th>
-              <th style="padding:14px;text-align:left;">Description</th>
-              <th style="padding:14px;text-align:right;width:150px;">Amount</th>
-              <th style="padding:14px;text-align:center;width:100px;">Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for e in monthly[month] %}
-            <tr style="border-bottom:1px solid #eee;">
-              <td style="padding:14px;">{{ e.date }}</td>
-              <td style="padding:14px;font-weight:600;">{{ e.name }}</td>
-              <td style="padding:14px;color:#555;">{{ e.description or "—" }}</td>
-              <td style="padding:14px;text-align:right;font-weight:bold;color:#d84315;">
-                Rs {{ "%.2f"|format(e.amount|float) }}
-              </td>
-              <td style="padding:14px;text-align:center;">
-                <form method="post" style="display:inline;" onsubmit="return confirm('Delete this entry permanently?')">
-                  <input type="hidden" name="action" value="delete">
-                  <input type="hidden" name="exp_id" value="{{ e.id }}">
-                  <button class="btn" style="background:#c62828;padding:9px 18px;font-size:14px;">
-                    Delete
-                  </button>
-                </form>
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
+
+      <!-- DESCRIPTION BELOW -->
+      {% if e.description %}
+      <div style="margin-top:6px;color:#555;font-size:14px;">
+        {{ e.description }}
       </div>
+      {% endif %}
+
     </div>
     {% endfor %}
-  {% else %}
-    <div class="card" style="text-align:center;padding:70px;color:#999;background:#fafafa;">
-      <h3>No entries added yet</h3>
-      <p>Use the form above to start recording other expenses.</p>
-    </div>
-  {% endif %}
+  </div>
 </div>
+{% endfor %}
 
 <script>
-  // پہلے مہینے کو خود بخود کھلا رکھیں
-  document.querySelectorAll('.month-body')[0]?.style?.display = 'block';
+/* ========= FOLD ========= */
+function toggle(i){
+ let e=document.getElementById("m"+i);
+ e.style.display=e.style.display=='none'?'block':'none';
+}
+
+/* ========= DRAFT SAVE ========= */
+const form=document.getElementById("expenseForm");
+const fields=["date","name","desc","amount"];
+
+window.addEventListener("load",()=>{
+ fields.forEach(f=>{
+  let el=form.querySelector(`[name="${f}"]`);
+  let v=localStorage.getItem("draft_"+f);
+  if(el && v!==null){el.value=v;}
+ });
+});
+
+fields.forEach(f=>{
+ let el=form.querySelector(`[name="${f}"]`);
+ if(el){
+  el.addEventListener("input",()=>{
+   localStorage.setItem("draft_"+f,el.value);
+  });
+ }
+});
+
+form.addEventListener("submit",()=>{
+ fields.forEach(f=>localStorage.removeItem("draft_"+f));
+});
 </script>
 """ + TPL_F
 
@@ -4209,8 +5069,10 @@ def other_expenses():
         sorted_months=sorted_months,
         monthly=monthly,
         monthly_totals=monthly_totals,
+        yearly_total=yearly_total,
         project=get_setting("project_name")
     )
+
 
 
 
@@ -4422,16 +5284,17 @@ def download_backup(filename):
 
 @app.route("/sales_history", methods=["GET", "POST"])
 def sales_history():
+
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
 
-    # تمام پروڈکٹس کی لسٹ فلٹر کے لیے
+    # ---------- All products (for auto typing filter) ----------
     c.execute("SELECT name FROM products ORDER BY name")
-    all_products = [row[0] for row in c.fetchall()]
+    all_products = [r[0] for r in c.fetchall()]
 
-    # مہینہ وار ڈیٹا (پروڈکٹ وائز ٹوٹل qty)
+    # ---------- Monthly data ----------
     c.execute("""
-        SELECT 
+        SELECT
             strftime('%Y-%m', date) AS ym,
             strftime('%B %Y', date) AS month_name,
             product,
@@ -4449,90 +5312,138 @@ def sales_history():
         if month_name not in monthly_data:
             monthly_data[month_name] = []
             grand_totals[month_name] = 0.0
-        monthly_data[month_name].append({"product": prod, "qty": float(qty)})
+        monthly_data[month_name].append({
+            "product": prod,
+            "qty": float(qty)
+        })
         grand_totals[month_name] += float(qty)
 
-    # ڈیٹ رینج فلٹر
+    # ---------- Date range filter ----------
     filtered_result = None
     filtered_grand = 0.0
+
     if request.method == "POST":
         from_date = request.form.get("from_date")
-        to_date = request.form.get("to_date")
-        prod_filter = request.form.get("product_filter", "").strip()
+        to_date   = request.form.get("to_date")
+        prod_f    = request.form.get("product_filter","").strip()
 
-        query = """
-            SELECT product, SUM(qty) AS total_qty
+        q = """
+            SELECT product, SUM(qty)
             FROM sales_log
             WHERE date BETWEEN ? AND ?
         """
         params = [from_date, to_date]
 
-        if prod_filter:
-            query += " AND product = ?"
-            params.append(prod_filter)
+        if prod_f:
+            q += " AND product = ?"
+            params.append(prod_f)
 
-        query += " GROUP BY product ORDER BY total_qty DESC"
+        q += " GROUP BY product ORDER BY SUM(qty) DESC"
 
-        c.execute(query, params)
-        results = c.fetchall()
-        filtered_result = [{"product": r[0], "qty": float(r[1])} for r in results]
-        filtered_grand = sum(float(r[1]) for r in results)
+        c.execute(q, params)
+        rows = c.fetchall()
+
+        filtered_result = []
+        for r in rows:
+            filtered_result.append({
+                "product": r[0],
+                "qty": float(r[1])
+            })
+            filtered_grand += float(r[1])
 
     conn.close()
 
+    # ======================= HTML =======================
     html = TPL_H + """
-<h2>📊 Product Sales History (Monthly)</h2>
-<p class="small"> SQLite </p>
+<h2>📊 Product Sales History</h2>
 
+<!-- ================= FILTER ================= -->
+<form method="post" class="card" style="margin-bottom:30px;">
+  <h3>📅 Filter</h3>
+  <div style="display:flex;flex-wrap:wrap;gap:15px;align-items:end;">
+    <div>
+      <label>From</label><br>
+      <input type="date" name="from_date" required>
+    </div>
+    <div>
+      <label>To</label><br>
+      <input type="date" name="to_date" required>
+    </div>
+    <div>
+      <label>Product</label><br>
+      <input list="plist" name="product_filter" placeholder="Type product name">
+      <datalist id="plist">
+        {% for p in all_products %}
+          <option value="{{p}}">
+        {% endfor %}
+      </datalist>
+    </div>
+    <div>
+      <button class="btn">Apply</button>
+    </div>
+    <div>
+      <button type="button" onclick="exportCSV()" class="btn"
+              style="background:#2e7d32;">⬇ Export CSV</button>
+    </div>
+  </div>
+</form>
 
-
+<!-- ================= FILTER RESULT ================= -->
 {% if filtered_result is not none %}
-<div class="card" style="background:#e8f5e9;border-left:6px solid #4caf50;padding:20px;margin-bottom:40px;">
-  <h3>Filtered Result: {{ request.form.get('from_date') }}  {{ request.form.get('to_date') }}</h3>
-  <p style="font-size:20px;margin:15px 0;"><strong>Total Quantity Sold: {{ "%.2f"|format(filtered_grand) }}</strong></p>
-  <table style="width:100%;border-collapse:collapse;">
-    <thead style="background:#4caf50;color:white;">
-      <tr><th style="padding:12px;">Product</th><th style="padding:12px;text-align:center;">Total Qty</th></tr>
-    </thead>
+<div class="card" style="background:#e8f5e9;margin-bottom:30px;">
+  <h3>Filtered Result</h3>
+  <p><strong>Total Qty:</strong> {{ "%.2f"|format(filtered_grand) }}</p>
+  <table style="width:100%;">
+    <thead><tr><th>Product</th><th style="text-align:center;">Qty</th></tr></thead>
     <tbody>
       {% for r in filtered_result %}
       <tr>
-        <td style="padding:12px;font-weight:600;">{{ r.product }}</td>
-        <td style="padding:12px;text-align:center;font-weight:bold;font-size:18px;color:#2e7d32;">{{ "%.2f"|format(r.qty) }}</td>
+        <td>{{ r.product }}</td>
+        <td style="text-align:center;font-weight:bold;">{{ "%.2f"|format(r.qty) }}</td>
       </tr>
-      {% else %}
-      <tr><td colspan="2" style="text-align:center;padding:40px;color:#999;">No entry found</td></tr>
       {% endfor %}
     </tbody>
   </table>
 </div>
 {% endif %}
 
-<!-- Global Search -->
-<input type="text" id="globalSearch" placeholder="🔍" 
-       style="width:100%;max-width:700px;padding:14px;font-size:16px;border-radius:10px;border:2px solid #1976d2;margin:20px 0;">
+<!-- ================= SEARCH ================= -->
+<input type="text" id="gsearch" placeholder="🔍 Search product..."
+       style="width:100%;max-width:600px;padding:14px;
+              border-radius:10px;border:2px solid #1976d2;margin-bottom:25px;">
 
-<!-- Monthly Breakdown -->
+<!-- ================= CHART ================= -->
+<div class="card" style="margin-bottom:35px;">
+  <h3>📈 Monthly Chart</h3>
+  <canvas id="chart" height="120"></canvas>
+</div>
+
+<!-- ================= MONTHLY DATA ================= -->
 {% for month, items in monthly_data.items() %}
-<div class="card" style="margin-bottom:30px;box-shadow:0 4px 15px rgba(0,0,0,0.08);border-radius:12px;overflow:hidden;">
-  <h3 style="background:#1976d2;color:white;padding:16px;margin:0;font-size:19px;">
+<div class="card" style="margin-bottom:25px;">
+  <button onclick="toggleMonth('{{ loop.index }}')"
+          class="mbtn"
+          data-month="{{ month }}"
+          style="width:100%;background:#1976d2;color:white;
+                 border:none;padding:16px;font-size:18px;
+                 text-align:left;border-radius:10px;">
     {{ month }}
-    <span style="float:right;font-size:17px;">Total Qty: <strong>{{ "%.2f"|format(grand_totals[month]) }}</strong></span>
-  </h3>
-  <div style="padding:20px;">
-    <table style="width:100%;border-collapse:collapse;">
-      <thead style="background:#e3f2fd;">
-        <tr>
-          <th style="padding:12px;text-align:left;">Product Name</th>
-          <th style="padding:12px;text-align:center;width:200px;">Qty Sold</th>
-        </tr>
+    <span style="float:right;">
+      Total: {{ "%.2f"|format(grand_totals[month]) }} ⬇
+    </span>
+  </button>
+
+  <div id="m{{ loop.index }}" style="display:none;padding-top:15px;">
+    <table style="width:100%;">
+      <thead>
+        <tr><th>Product</th><th style="text-align:center;">Qty</th></tr>
       </thead>
       <tbody>
-        {% for item in items %}
-        <tr class="search-row">
-          <td style="padding:12px;font-weight:600;">{{ item.product }}</td>
-          <td style="padding:12px;text-align:center;font-weight:bold;font-size:17px;color:#1565c0;">
-            {{ "%.2f"|format(item.qty) }}
+        {% for it in items %}
+        <tr class="srow">
+          <td>{{ it.product }}</td>
+          <td style="text-align:center;font-weight:bold;">
+            {{ "%.2f"|format(it.qty) }}
           </td>
         </tr>
         {% endfor %}
@@ -4540,28 +5451,67 @@ def sales_history():
     </table>
   </div>
 </div>
-{% else %}
-<div class="card" style="text-align:center;padding:50px;color:#666;background:#f9f9f9;">
-  <h3>ابھی تک کوئی سیل نہیں ہوئی</h3>
-  <p> ۔</p>
-</div>
 {% endfor %}
 
+<!-- ================= BACK ================= -->
+<div style="text-align:center;margin-top:40px;">
+  <a href="{{ url_for('products') }}" class="btn"
+     style="padding:14px 50px;">⬅ Back</a>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
-document.getElementById('globalSearch').addEventListener('keyup', function() {
-  let val = this.value.toLowerCase().trim();
-  document.querySelectorAll('.search-row').forEach(row => {
-    let text = row.textContent.toLowerCase();
-    row.style.display = text.includes(val) ? '' : 'none';
+// search
+document.getElementById('gsearch').addEventListener('keyup',e=>{
+  let v=e.target.value.toLowerCase();
+  document.querySelectorAll('.srow').forEach(r=>{
+    r.style.display=r.innerText.toLowerCase().includes(v)?'':'none';
   });
 });
-</script>
 
-<p style="text-align:center;margin-top:40px;">
-  <a href="{{ url_for('products') }}" class="btn" style="padding:14px 40px;font-size:18px;background:#424242;">
-    ← Back to Products
-  </a>
-</p>
+// fold
+function toggleMonth(i){
+  let d=document.getElementById('m'+i);
+  d.style.display=d.style.display==='none'?'block':'none';
+}
+
+// auto open current month
+(function(){
+  let cm=new Date().toLocaleString('en-US',{month:'long',year:'numeric'});
+  document.querySelectorAll('.mbtn').forEach((b,i)=>{
+    if(b.dataset.month===cm){toggleMonth(i+1);}
+  });
+})();
+
+// export
+function exportCSV(){
+  let r=[["Month","Product","Qty"]];
+  document.querySelectorAll('.mbtn').forEach((b,i)=>{
+    let m=b.dataset.month;
+    document.querySelectorAll('#m'+(i+1)+' tbody tr').forEach(tr=>{
+      let t=tr.children;
+      r.push([m,t[0].innerText,t[1].innerText]);
+    });
+  });
+  let c=r.map(x=>x.join(',')).join('\\n');
+  let a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([c],{type:'text/csv'}));
+  a.download='sales_history.csv'; a.click();
+}
+
+// chart
+new Chart(document.getElementById('chart'),{
+  type:'bar',
+  data:{
+    labels: {{ monthly_data.keys()|list|tojson }},
+    datasets:[{
+      data: {{ grand_totals.values()|list|tojson }},
+      label:'Total Qty'
+    }]
+  },
+  options:{responsive:true,plugins:{legend:{display:false}}}
+});
+</script>
 """ + TPL_F
 
     return render_template_string(
