@@ -18,11 +18,11 @@ from werkzeug.utils import secure_filename
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 
-import threading
-import time
-import tkinter as tk
-from tkinter import font
-from PIL import Image, ImageTk
+#import threading
+#import time
+#import tkinter as tk
+#from tkinter import font
+#from PIL import Image, ImageTk
 
 
 # ===================== EXE / ROOT =====================
