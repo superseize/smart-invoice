@@ -815,6 +815,36 @@ body{margin:0;font-family:system-ui;background:#f8fafc}
     font-size: 14px;
   }
 }
+
+/* ===== FORCE 4 DASHBOARD CARDS PER ROW (MOBILE) ===== */
+@media (max-width: 768px){
+
+  .card-container{
+    grid-template-columns: repeat(4, 1fr) !important;
+    gap: 8px !important;
+    margin: 10px 5px !important;
+  }
+
+  .dash-card{
+    padding: 10px !important;
+    border-radius: 10px;
+  }
+
+  .dash-card img,
+  .dash-icon{
+    width: 40px !important;
+    height: 40px !important;
+  }
+
+  .dash-card h3{
+    font-size: 11px !important;
+  }
+
+  .dash-card p{
+    font-size: 10px !important;
+  }
+}
+
 /* ===== TABLE MOBILE FIX ===== */
 .table-wrap{
   width:100%;
@@ -4785,4 +4815,5 @@ if __name__ == "__main__":
         debug=False,
         use_reloader=False
     )
+
 
