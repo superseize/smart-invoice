@@ -654,16 +654,21 @@ def setup_account():
     html = """
     <!doctype html>
     <html lang="en">
-    <head><meta charset="utf-8"><title>Set Up Your Account</title>
+    <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Set Up Your Account</title>
     <style>
+        *{box-sizing:border-box}
         body {background: linear-gradient(135deg, #1e3a8a, #3b82f6); display:flex; justify-content:center; align-items:center; min-height:100vh; margin:0; font-family: system-ui, Arial; padding:20px;}
-        .box {background: white; padding: 40px; border-radius: 20px; box-shadow: 0 15px 40px rgba(0,0,0,0.3); width: 420px; text-align: center;}
+        .box {background: white; padding: 40px; border-radius: 20px; box-shadow: 0 15px 40px rgba(0,0,0,0.3); width: 420px; max-width:100%; text-align: center;}
         h2 {color: #1e3a8a; margin-bottom: 10px; font-size: 26px;}
         p {color:#666; margin-bottom:20px;}
-        input {width: 100%; padding: 14px; margin: 8px 0; border: 1px solid #ddd; border-radius: 10px; font-size: 15px; box-sizing: border-box;}
+        input {width: 100%; padding: 14px; margin: 8px 0; border: 1px solid #ddd; border-radius: 10px; font-size: 16px; box-sizing: border-box;}
         button {width: 100%; padding: 15px; background: #1e3a8a; color: white; border: none; border-radius: 10px; font-size: 18px; cursor: pointer; margin-top:10px;}
         button:hover {background: #1e40af;}
         .notice {background: #fee; color: #c62828; padding: 10px; border-radius: 8px; margin: 15px 0;}
+        @media (max-width:480px){
+          .box{padding:26px 20px;border-radius:14px}
+          h2{font-size:22px}
+        }
     </style>
     </head>
     <body>
@@ -693,89 +698,160 @@ def logout():
     session.pop("logged_in", None)
     flash("log out")
     return redirect(url_for("login"))
-@app.route("/reset-password", methods=["GET", "POST"])
-def reset_password():
-    question = get_setting("security_question", "What is your favorite color?")
-    correct_answer = get_setting("security_answer", "").lower().strip()
-
-    MASTER_PASSWORD = "ishtiaq@404"  # 🔐 hidden backup
+@app.route("/forgot-password", methods=["GET", "POST"])
+def forgot_password():
+    """Step 1: user enters their account email, we email a 6-digit OTP."""
+    admin_email = get_setting("admin_email", "")
 
     if request.method == "POST":
-        user_input = request.form.get("answer", "").lower().strip()
-
-        # ── Security answer OR Master password same field ──
-        if user_input == correct_answer or user_input == MASTER_PASSWORD:
-            set_setting("app_password", "0475")
-            flash("Password reset successful!")
-            return redirect(url_for("login"))
+        email = (request.form.get("email") or "").strip().lower()
+        if not email or "@" not in email:
+            flash("Please enter a valid email address")
         else:
-            flash("Incorrect answer. Try again.")
+            # Never reveal whether the email matched an account (generic message either way)
+            if admin_email and email == admin_email.lower():
+                cooldown = otp_resend_cooldown_seconds(email)
+                if cooldown <= 0:
+                    generate_and_send_otp(email, purpose="reset")
+                session["otp_email"] = email
+                return redirect(url_for("verify_otp"))
+            flash("If an account exists for this email, a verification code has been sent.")
 
-    return render_template_string("""
+    html = """
     <!doctype html>
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <title>Reset Password</title>
-        <style>
-            body {
-                background: linear-gradient(135deg,#667eea,#764ba2);
-                display:flex;
-                justify-content:center;
-                align-items:center;
-                height:100vh;
-                margin:0;
-                font-family:system-ui;
-            }
-
-            .box {
-                background:white;
-                padding:40px;
-                border-radius:20px;
-                width:400px;
-                text-align:center;
-                box-shadow:0 15px 40px rgba(0,0,0,0.3);
-            }
-
-            h2 { color:#d32f2f; }
-
-            input {
-                width:100%;
-                padding:12px;
-                margin-top:15px;
-                border:1px solid #ddd;
-                border-radius:10px;
-            }
-
-            button {
-                width:100%;
-                padding:12px;
-                margin-top:15px;
-                background:#d32f2f;
-                color:white;
-                border:none;
-                border-radius:10px;
-                cursor:pointer;
-            }
-
-            p { color:#555; }
-        </style>
+    <html lang="en">
+    <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Forgot Password</title>
+    <style>""" + AUTH_STYLE + """</style>
     </head>
     <body>
-        <div class="box">
-            <h2>🔄 Reset Password</h2>
+        <div class="auth-box">
+            <h2>🔄 Forgot Password</h2>
+            <p class="sub">Enter your account email — we'll send a 6-digit verification code.</p>
+            {% with messages = get_flashed_messages() %}
+              {% if messages %}<div class="notice">{{ messages[0] }}</div>{% endif %}
+            {% endwith %}
+            <form method="post">
+                <input type="email" name="email" placeholder="Your account email" required autofocus>
+                <button type="submit" class="auth-btn">Send Verification Code</button>
+            </form>
+            <div class="auth-link"><a href="{{ url_for('login') }}">Back to Login</a></div>
+        </div>
+    </body>
+    </html>
+    """
+    return render_template_string(html)
 
-            <p><b>Security Question:</b><br>{{ question }}</p>
 
-            <form method="post" autocomplete="off">
-                <!-- ONLY ONE INPUT FIELD -->
-                <input name="answer" placeholder="Enter your answer">
-                <button type="submit">Reset Password</button>
+@app.route("/verify-otp", methods=["GET", "POST"])
+def verify_otp():
+    """Step 2: user enters the 6-digit code that was emailed to them."""
+    email = session.get("otp_email", "")
+    if not email:
+        flash("Please start password reset again.")
+        return redirect(url_for("forgot_password"))
+
+    if request.method == "POST":
+        if request.form.get("resend"):
+            cooldown = otp_resend_cooldown_seconds(email)
+            if cooldown > 0:
+                flash(f"Please wait {cooldown}s before requesting a new code.")
+            else:
+                generate_and_send_otp(email, purpose="reset")
+                flash("A new verification code has been sent.")
+        else:
+            code = (request.form.get("otp") or "").strip()
+            ok, msg = verify_otp_code(email, code)
+            if ok:
+                session["otp_verified_email"] = email
+                return redirect(url_for("set_new_password"))
+            flash(msg)
+
+    html = """
+    <!doctype html>
+    <html lang="en">
+    <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verify Code</title>
+    <style>""" + AUTH_STYLE + """</style>
+    </head>
+    <body>
+        <div class="auth-box">
+            <h2>📧 Verify Your Email</h2>
+            <p class="sub">Enter the 6-digit code sent to</p>
+            <div class="masked-email">{{ masked }}</div>
+            {% with messages = get_flashed_messages() %}
+              {% if messages %}<div class="notice">{{ messages[0] }}</div>{% endif %}
+            {% endwith %}
+            <form method="post">
+                <input type="text" name="otp" placeholder="6-digit code" maxlength="6" inputmode="numeric" required autofocus>
+                <button type="submit" class="auth-btn">Verify Code</button>
+            </form>
+            <form method="post" style="margin-top:8px">
+                <input type="hidden" name="resend" value="1">
+                <button type="submit" class="auth-btn" style="background:#94a3b8;box-shadow:none">Resend Code</button>
+            </form>
+            <div class="auth-link"><a href="{{ url_for('login') }}">Back to Login</a></div>
+        </div>
+    </body>
+    </html>
+    """
+    return render_template_string(html, masked=mask_email(email))
+
+
+@app.route("/set-new-password", methods=["GET", "POST"])
+def set_new_password():
+    """Step 3: OTP verified — user picks a new password, saved locally (SQLite)."""
+    email = session.get("otp_verified_email", "")
+    if not email:
+        flash("Please verify your email first.")
+        return redirect(url_for("forgot_password"))
+
+    if request.method == "POST":
+        new_password = request.form.get("new_password") or ""
+        confirm = request.form.get("confirm") or ""
+        if len(new_password) < 4:
+            flash("Password must be at least 4 characters")
+        elif new_password != confirm:
+            flash("Passwords do not match")
+        else:
+            set_setting("admin_password_hash", generate_password_hash(new_password))
+            try:
+                set_setting("session_version", str(int(get_setting("session_version", "1")) + 1))
+            except Exception:
+                set_setting("session_version", "1")
+            clear_otp(email)
+            session.pop("otp_email", None)
+            session.pop("otp_verified_email", None)
+            flash("Password reset successful. Please log in.")
+            return redirect(url_for("login"))
+
+    html = """
+    <!doctype html>
+    <html lang="en">
+    <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Set New Password</title>
+    <style>""" + AUTH_STYLE + """</style>
+    </head>
+    <body>
+        <div class="auth-box">
+            <h2>🔑 Set New Password</h2>
+            <p class="sub">Choose a new password for your account</p>
+            {% with messages = get_flashed_messages() %}
+              {% if messages %}<div class="notice">{{ messages[0] }}</div>{% endif %}
+            {% endwith %}
+            <form method="post">
+                <input type="password" name="new_password" placeholder="New password (min 4 characters)" required autofocus>
+                <input type="password" name="confirm" placeholder="Confirm new password" required>
+                <button type="submit" class="auth-btn">Update Password</button>
             </form>
         </div>
     </body>
     </html>
-    """, question=question)
+    """
+    return render_template_string(html)
+
+
+@app.route("/reset-password")
+def reset_password():
+    # Old bookmarked/linked URL — funnels into the new email-OTP reset flow
+    return redirect(url_for("forgot_password"))
 # ---------- Paths ----------
 #ROOT = Path.cwd()
 DATA = ROOT / "db_files"
